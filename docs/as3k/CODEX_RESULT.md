@@ -50,7 +50,7 @@ Command: `./alphasma3k asma3kdv -debug -debugscript ../diagnostic/as3kdv_lcd_nol
 
 - Safe tracked changes: `src/mame/skeleton/alphasma3k.cpp`, `docs/as3k/CODEX_RESULT.md`.
 - Nothing under `roms/`, diagnostics, generated binaries, or proprietary historical artifacts was staged.
-- Implementation/result commit: pending final commit.
+- Implementation/result commit: `0b414444` (`as3k: make LCD Port C bridge atomic`).
 - Push target: `as3k-project/as3k-mame0289-dev`.
-- Push result: pending final push.
-- Final `git status --short`: pending publication.
+- Push result: succeeded (`ad05eaab..0b414444`).
+- Final `git status --short` after publication recording: clean.
