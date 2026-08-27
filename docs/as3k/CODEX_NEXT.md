@@ -1,181 +1,170 @@
-# Current Codex task — study `SystemInstallExceptionVectors` before execution
+# Current Codex task — execute and validate `SystemInstallExceptionVectors`
 
 Date: 2026-08-26
 
 Read `AGENTS.md` and the current `docs/as3k/CODEX_RESULT.md` first.
 
-## Established state
+## Established evidence
 
-The AS3K LCD path is now validated through `LCDInitializeModule` and the composite 40×4 screen infrastructure is present:
+The static study of `SystemInstallExceptionVectors` is complete and published.
 
-- atomic Port C bridge validated;
-- two KS0066 devices complete LCD initialization with finite busy polling;
-- composite screen is 240×36, rows 1–2 from E1/`ks0066_0`, rows 3–4 from E2/`ks0066_1`;
-- both controllers are configured visually as 2×40;
-- no-LCD and KS0066 regressions pass;
-- execution is still intentionally stopped at the `LCDInitializeModule` RTS `0x0043079e`.
+Treat these facts as established:
 
-The next real AlphaWord primary-module call is:
+- entry: `0x00430504`;
+- RTS: `0x00430524`;
+- the routine performs exactly four architectural `MOVE.L` stores and no helper calls;
+- vector 2 at `0x00000008` must become `0x00430526` (`SystemBusError`);
+- vector 3 at `0x0000000c` must become `0x004305b0` (`SystemAddressError`);
+- vector 4 at `0x00000010` must become `0x0043063a` (`SystemIllegalInstruction`);
+- vector 5 at `0x00000014` must become `0x004306c4` (`SystemDivideByZeroError`);
+- each 32-bit write is expected to appear in the MAME debugger as two big-endian 16-bit transactions;
+- the four installed handlers are diagnostic/error paths and must **not** execute during normal initialization;
+- Startup Manager TRAP 0 at `0x00000080` and InterruptInitializeModule vectors at `0x00000110`, `0x00000114`, `0x00000118` must remain intact;
+- the next primary-module call is `KeyboardInitializeModule = 0x0042e2a8`.
 
-`SystemInstallExceptionVectors = 0x00430504`
-
-followed by:
-
-`KeyboardInitializeModule = 0x0042e2a8`.
-
-The synthetic four-row visual fixture is deliberately deferred; do not create it in this task.
+This task is a **narrow dynamic validation only**. Do not enter keyboard code and do not modify MAME source.
 
 ## Goal
 
-Perform an **evidence-first static study** of `SystemInstallExceptionVectors` and any directly called exception handlers/helpers so the following task can execute it with exact watchpoints and expected RAM/vector values.
-
-This task is static only.
-
-**Do not modify source code.**
-**Do not rebuild.**
-**Do not run an emulated AS3K system.**
-**Do not continue into keyboard.**
+Execute `SystemInstallExceptionVectors` on `asma3kdv`, prove the exact four vector values written to low RAM, verify none of the installed exception handlers fires, and stop at the first instruction boundary of `KeyboardInitializeModule` before any keyboard instruction executes.
 
 ---
 
-## A. Repository / source gate
+## A. Repository gate
 
-From:
-
-`~/Projects/alphasmart-as3k/mame0289`
+From `~/Projects/alphasmart-as3k/mame0289`:
 
 1. `git pull --ff-only as3k-project as3k-mame0289-dev`.
-2. Confirm branch is `as3k-mame0289-dev` and tracked status is clean.
-3. Confirm current branch includes composite-LCD implementation commit `38528ee8ffca9ff718d87e88145cae92d9e0134a` or a clean descendant.
-4. Do not edit `alphasma3k.cpp` or any MAME source.
+2. Confirm branch is `as3k-mame0289-dev`.
+3. Confirm tracked `git status --short` is clean.
+4. Confirm current branch contains static-study commit `4b3f5e065fdf8e694dbe86d1cafb819a67ec4cb0` or a clean descendant.
+5. Run `git diff --check`.
+
+Do not edit `src/mame/skeleton/alphasma3k.cpp`, `mame.lst`, any MAME core, ROM definition, or fixture.
+
+No rebuild should be necessary unless the existing `./alphasma3k` executable is missing. If a rebuild is unexpectedly required, stop and report rather than broadening the task.
 
 ---
 
-## B. Locate the original AlphaSmart source/listing
+## B. Create one local debugger script
 
-Search the local archived AS3000 material for the source and linked listing corresponding to `SystemInstallExceptionVectors`.
+Create local-only:
 
-Prioritize original artifacts such as:
+`../diagnostic/as3kdv_exception_vectors.cmd`
 
-- `ModuleSources/SystemModule.c` / related headers;
-- `SystemModule.o.lst` or equivalent linked listing;
-- `AWordRAM01.out` / symbol map;
-- AlphaWord `.map`, `.lst`, or linker outputs already used in prior tasks.
+Use explicit `0x...` literals everywhere.
 
-Report the exact source function and any constants/types it depends on.
+Start from this plan, adapting only if MAME 0.289 debugger syntax demonstrably requires a small correction:
 
-If the standalone source is absent, use the linked listing and symbol map and state that explicitly.
+```text
+temp0 = 0
+bp 0x00430504,1,{ temp0 = 1 ; logerror "AS3KDV_EXCEPTION_INSTALL_ENTRY PC=%08X A7=%08X SR=%04X\n",pc,sp,sr ; g }
+wp 0x00000008,0x4,w,temp0==1,{ logerror "AS3KDV_VECTOR2 ADDR=%08X DATA=%08X PC=%08X\n",wpaddr,wpdata,pc ; g }
+wp 0x0000000c,0x4,w,temp0==1,{ logerror "AS3KDV_VECTOR3 ADDR=%08X DATA=%08X PC=%08X\n",wpaddr,wpdata,pc ; g }
+wp 0x00000010,0x4,w,temp0==1,{ logerror "AS3KDV_VECTOR4 ADDR=%08X DATA=%08X PC=%08X\n",wpaddr,wpdata,pc ; g }
+wp 0x00000014,0x4,w,temp0==1,{ logerror "AS3KDV_VECTOR5 ADDR=%08X DATA=%08X PC=%08X\n",wpaddr,wpdata,pc ; g }
+bp 0x00430526,1,{ logerror "AS3KDV_UNEXPECTED_BUS_ERROR PC=%08X\n",pc ; quit }
+bp 0x004305b0,1,{ logerror "AS3KDV_UNEXPECTED_ADDRESS_ERROR PC=%08X\n",pc ; quit }
+bp 0x0043063a,1,{ logerror "AS3KDV_UNEXPECTED_ILLEGAL_INSTRUCTION PC=%08X\n",pc ; quit }
+bp 0x004306c4,1,{ logerror "AS3KDV_UNEXPECTED_DIVIDE_BY_ZERO PC=%08X\n",pc ; quit }
+bp 0x00430524,1,{ logerror "AS3KDV_EXCEPTION_INSTALL_RTS V2=%08X V3=%08X V4=%08X V5=%08X TRAP0=%08X LV4=%08X LV5=%08X LV6=%08X\n",d@0x00000008,d@0x0000000c,d@0x00000010,d@0x00000014,d@0x00000080,d@0x00000110,d@0x00000114,d@0x00000118 ; g }
+bp 0x0042e2a8,1,{ logerror "AS3KDV_KEYBOARD_ENTRY_STOP PC=%08X V2=%08X V3=%08X V4=%08X V5=%08X TRAP0=%08X LV4=%08X LV5=%08X LV6=%08X\n",pc,d@0x00000008,d@0x0000000c,d@0x00000010,d@0x00000014,d@0x00000080,d@0x00000110,d@0x00000114,d@0x00000118 ; quit }
+g
+```
 
----
+Important:
 
-## C. Correlate the exact Flash-linked function
-
-Using the local AlphaWord fixture/listing artifacts, determine precisely:
-
-1. start address: expected `0x00430504`;
-2. exact end/RTS address and byte length;
-3. every direct call made by the function;
-4. every RAM address written;
-5. every exception-vector entry written;
-6. exact handler address stored in each vector;
-7. whether writes are byte/word/long and expected big-endian debugger transaction behavior;
-8. whether the function touches any MC68EZ328 internal hardware register (`0xffffxxxx`) or external hardware window (`0x0060xxxx`);
-9. whether it modifies SR, stack pointer, VBR-like state, interrupt mask, or any CPU-specific control state;
-10. whether any helper can fail/assert/loop.
-
-Compare the linked Flash bytes against the historical source/listing and account for relocations exactly as done for Interrupt/Timer/LCD.
-
-Do not infer names from addresses if the symbol/listing evidence is available.
+- Breakpoint/log PC may appear +2 because of the already documented debugger behavior; do not treat that alone as failure.
+- If `d@` formatting is unsupported in this context, use the already proven MAME debugger memory-expression syntax and document the exact correction.
+- Do not place a breakpoint *inside* `KeyboardInitializeModule`; the stop at its entry must quit before its first instruction executes.
 
 ---
 
-## D. Reconstruct the exception-vector table changes
+## C. Execute only the established no-LCD valid-AlphaWord diagnostic
 
-Build a precise table with at least:
+Run only:
 
-`vector number -> vector-table RAM address -> handler symbol -> handler Flash address -> write size`
+```sh
+./alphasma3k asma3kdv \
+  -debug \
+  -debugscript ../diagnostic/as3kdv_exception_vectors.cmd \
+  -log \
+  -seconds_to_run 8
+```
 
-Use 68k vector numbering correctly: vector N occupies `N * 4` in the vector table unless the AlphaSmart source explicitly does something different.
+Capture console output and preserve the resulting MAME log under local diagnostic names, for example:
 
-Determine whether the function installs handlers for, for example, bus error, address error, illegal instruction, divide-by-zero, CHK, TRAPV, privilege violation, trace, line-A/F, spurious interrupt, traps, or only a subset. Do not assume the list; derive it from the source/bininary.
+- `../diagnostic/as3kdv_exception_vectors_console.log`
+- `../diagnostic/as3kdv_exception_vectors.log`
 
-Also distinguish any vectors already written by earlier modules:
+Do not stage diagnostic logs.
 
-- Startup Manager TRAP 0 setup at RAM `0x00000080` if still relevant;
-- InterruptInitializeModule level 4/5/6 vectors at RAM `0x00000110`, `0x00000114`, `0x00000118`.
-
-Report whether `SystemInstallExceptionVectors` overwrites any previously established vector or leaves them intact.
-
----
-
-## E. Inspect the installed handlers just enough for execution planning
-
-For each handler installed by `SystemInstallExceptionVectors`, inspect only enough static code/source to answer:
-
-- does it immediately return (`RTE`) or enter a diagnostic/reset/assert path?
-- does it reference hardware not yet emulated?
-- does it write a recognizable RAM diagnostic/signature?
-- does it intentionally loop?
-- is any handler expected to execute during normal initialization, or are these only safety vectors?
-
-Do **not** recursively reverse engineer entire error subsystems. Stop once normal-path implications are clear.
+`asma3kdv` intentionally removes the KS0066 devices. That is acceptable here because the LCD protocol has already been validated separately and this task tests only the exception-vector installer after the known LCD return.
 
 ---
 
-## F. Check MAME 68000/MC68EZ328 compatibility relevant to this routine
+## D. Exact pass criteria
 
-Inspect MAME 0.289 source only as needed to determine whether the exact operations used by `SystemInstallExceptionVectors` require anything beyond ordinary RAM vector writes and normal 68k execution.
+The test passes only if all of the following are true:
 
-In particular verify whether the MC68EZ328/68000 model uses the base vector table at address 0 (no relocatable VBR in this CPU generation) for the vectors being installed, unless source/core evidence shows otherwise.
+1. `SystemInstallExceptionVectors` entry is reached.
+2. Exactly the expected vector stores occur after entry.
+3. Reconstruct the writes as:
+   - `0x00000008`: high `0x0043`, low `0x0526` -> `0x00430526`;
+   - `0x0000000c`: high `0x0043`, low `0x05b0` -> `0x004305b0`;
+   - `0x00000010`: high `0x0043`, low `0x063a` -> `0x0043063a`;
+   - `0x00000014`: high `0x0043`, low `0x06c4` -> `0x004306c4`.
+4. The debugger shows the expected high-word then low-word behavior for each architectural `MOVE.L`.
+5. The RTS breakpoint at `0x00430524` is reached.
+6. Final longwords at RTS are exactly the four expected handler addresses.
+7. No breakpoint for `SystemBusError`, `SystemAddressError`, `SystemIllegalInstruction`, or `SystemDivideByZeroError` fires.
+8. Previously established vectors remain unchanged through the routine:
+   - TRAP 0 at `0x00000080`;
+   - level 4 at `0x00000110`;
+   - level 5 at `0x00000114`;
+   - level 6 at `0x00000118`.
+   Record their exact observed values and compare with the previously validated values.
+9. Execution reaches `KeyboardInitializeModule = 0x0042e2a8` before timeout.
+10. Quit at that entry without executing keyboard code.
 
-Identify any credible emulator limitation that could affect this function itself. Do not propose fixes without evidence.
+Previously validated level-vector values are:
+
+- `0x00000110 = 0x00431a04`
+- `0x00000114 = 0x00431ab0`
+- `0x00000118 = 0x00431ae6`
+
+For TRAP 0, record the factual observed value rather than assuming an address if the prior exact value is not already established in local notes.
+
+If any installed exception handler fires, a vector value differs, the keyboard entry is not reached, or an unexplained exception/hang occurs: **stop and report. Do not modify the driver or attempt a fix in this task.**
 
 ---
 
-## G. Design the next narrow dynamic test, but do not run it
+## E. Publication
 
-Based on the static result, specify an exact debugger plan for the next task:
-
-- entry breakpoint at `0x00430504`;
-- watchpoints on the exact vector-table RAM ranges written by the function;
-- any helper/return breakpoint needed;
-- final breakpoint at `KeyboardInitializeModule = 0x0042e2a8`, stopping before keyboard executes;
-- expected final values at every changed vector entry.
-
-Use explicit `0x...` literals in all proposed MAME debugger commands/lengths.
-
-If long writes will appear as two 16-bit debugger transactions, state the expected high/low halves.
-
-The dynamic test should prove only that `SystemInstallExceptionVectors` writes the expected vectors and returns into `KeyboardInitializeModule` without exception or hang.
-
-Do not run this test now.
-
----
-
-## H. Publication
-
-This is a no-source-change task.
+This task should not change MAME source.
 
 At the end:
 
 1. `git diff --check`.
 2. `git status --short`.
-3. Confirm no MAME source changed.
+3. Confirm no MAME source, ROM, fixture, generated binary, or diagnostic log is staged.
 4. Replace `docs/as3k/CODEX_RESULT.md` with a factual report containing:
-   - exact source/listing artifacts found;
-   - exact linked range and RTS;
-   - every direct call/helper;
-   - complete vector-write table;
-   - whether earlier Startup/Interrupt vectors are preserved or overwritten;
-   - handler addresses and concise normal-path behavior;
-   - any hardware accesses or emulator risks;
-   - exact next debugger/watchpoint plan;
-   - `git diff --check` and final Git status.
+   - command and script used;
+   - entry/RTS/keyboard-stop observations;
+   - every watchpoint transaction with address/data/PC;
+   - reconstructed final vector values;
+   - confirmation of high-word/low-word order;
+   - observed preserved TRAP 0 and level 4/5/6 vectors;
+   - whether any unexpected exception handler fired;
+   - whether keyboard entry was reached before timeout;
+   - confirmation keyboard code was not executed;
+   - `git diff --check` and final status;
+   - documentation commit SHA and push result.
 5. Commit only the safe documentation result.
 6. Push only to `as3k-project/as3k-mame0289-dev`.
 
 ## Stop condition
 
-Stop after `SystemInstallExceptionVectors` is fully correlated statically and the next dynamic test is specified.
+Stop immediately after proving `SystemInstallExceptionVectors` and reaching the entry of `KeyboardInitializeModule`.
 
-**Do not execute the function yet. Do not enter `KeyboardInitializeModule`. Do not modify MAME source.**
+**Do not execute or reverse engineer keyboard in this task. Do not modify MAME source.**
