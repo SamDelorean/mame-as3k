@@ -1,32 +1,33 @@
-# Current Codex task — implement and validate only the AS3K external keyboard latch
+# Current Codex task — implement only MC68EZ328 Port-A PAPUEN / WDTH8 fidelity
 
 Date: 2026-08-26
 
 Read `AGENTS.md`, `docs/as3k/STATUS.md`, and the current `docs/as3k/CODEX_RESULT.md` first.
 
-## Established evidence
+## Established state
 
-The valid-AlphaWord path has executed through `KeyboardInitializeModule` Phase 1 and returned normally to caller `0x00420168` with `D0 = 0`.
+The AS3K external keyboard latch is now implemented and dynamically validated in commit:
 
-The exact Phase-1 transaction at the board latch is:
+`c5e6eb1ba51694e672d133667f86c2d3c1f71be1`
 
-`write byte 0xFF to 0x00600000`
+Keyboard Phase 1 still returns normally to caller `0x00420168` with `D0 = 0`.
 
-The previous dynamic run showed this access as unmapped but nonfatal:
+The static MC68EZ328 keyboard GPIO audit is commit:
 
-`unmapped program memory write to 00600000 = FFFF & FF00`
+`08816104002f27365ace1798eddd06b78550c764`
 
-Historical AS3K material and the production chip-select values establish the external write-latch region at `0x00600000` with a 32 KiB chip-select window. The physical component is an 8-bit latch (74HC574-class board logic) whose eight outputs are keyboard columns X1–X8. PA0–PA6 provide X9–X15; PD0–PD7 are rows Y1–Y8.
+Treat these audit conclusions as established:
 
-The MC68EZ328 audit is complete. Treat these conclusions as established:
+- `PADIR` / `PADATA` are mapped for MC68EZ328 through `base_internal_map()`;
+- `PAPUEN = 0xFFFFF402` is genuinely missing and needs real state/semantics;
+- `0xFFFFF403` is reserved on MC68EZ328 and must **not** be implemented as a fake PASEL register;
+- Port-A GPIO selection on EZ is controlled by `SCR.WDTH8`;
+- the current EZ core changes internal `m_pasel` from `SCR.WDTH8`, but the audit found that this internal selection state is not saved on the EZ path and the clear/set behavior must be checked for exact fidelity;
+- `PDSEL`, `PDKBEN/PKBDINT`, keyboard matrix plumbing, input keys, and Phase 2 are separate later stages.
 
-- `0x00600000` is **driver/board logic**, not DragonBall core state;
-- PAPUEN, PDSEL and later PDKBEN/PKBDINT are separate core-fidelity stages;
-- EZ address `0xFFFFF403` is reserved in the processor manual and must **not** be implemented as a fake PASEL register;
-- no keyboard matrix plumbing or key mappings should be added in this stage;
-- Phase 2 must not be executed in this stage.
+This task explicitly authorizes a **narrow MC68EZ328 core change** in `src/devices/machine/mc68328.cpp` and `.h` only as required for this Port-A stage.
 
-This task is the **first single implementation stage from the audit plan**: external latch only.
+Do not broaden into Port D or other peripherals.
 
 ---
 
@@ -35,151 +36,178 @@ This task is the **first single implementation stage from the audit plan**: exte
 From `~/Projects/alphasmart-as3k/mame0289`:
 
 1. `git pull --ff-only as3k-project as3k-mame0289-dev`.
-2. Confirm branch is `as3k-mame0289-dev`.
-3. Confirm tracked status is clean.
-4. Confirm HEAD contains audit commit `08816104002f27365ace1798eddd06b78550c764` and the current public `STATUS.md` says the next stage is the external latch.
-5. Run `git diff --check`.
+2. Confirm branch `as3k-mame0289-dev`, clean tracked status, and `git diff --check`.
+3. Confirm latch commit `c5e6eb1ba51694e672d133667f86c2d3c1f71be1` is an ancestor of HEAD.
+4. Confirm `docs/as3k/STATUS.md` identifies EZ Port-A fidelity as the next stage.
+5. Do not touch `master`.
 
-Do not touch `master`.
+Before editing, inspect the exact current implementations of:
 
-## B. Inspect the existing driver/map before editing
+- `base_internal_map()`;
+- `mc68ez328_device::internal_map()`;
+- `padata_r/w`;
+- `padir_r/w`;
+- `scr_w` and SCR reset/save behavior;
+- `m_pasel` declaration/reset/save registration across base/original/EZ classes.
 
-Inspect `src/mame/skeleton/alphasma3k.cpp` and determine the exact program-space bus width and existing address-map style.
+Also re-check the MC68EZ328 manual semantics for PAPUEN and `SCR.WDTH8`.
 
-Also inspect the historical AS3K source/material already available locally only as needed to confirm how the write latch is addressed. Do not publish proprietary files.
+If the smallest correct implementation would require a broad redesign or would alter original `mc68328_device` behavior in a way you cannot prove safe, stop and report before coding.
 
-Important mapping constraint:
+---
 
-- the board chip-select window is `0x00600000–0x00607FFF`;
-- the actual peripheral is an 8-bit write latch;
-- the observed Phase-1 byte transaction at `0x00600000` appears on the high byte lane (`mem_mask 0xFF00`) of the 16-bit CPU bus.
+## B. Required behavior — PAPUEN
 
-Implement the smallest mapping that correctly represents the proven board decode and byte-lane behavior. Do not invent readable register semantics if the hardware/source evidence only establishes a write latch.
+Implement PAPUEN for **MC68EZ328** with the documented semantics:
 
-If source evidence shows the latch is mirrored throughout the 32 KiB CS window, map the window accordingly. If only address `0x00600000` is demonstrably decoded, use the narrowest supported mapping and state the uncertainty in the result. Do not guess silently.
+- address: `0xFFFFF402`;
+- eight read/write pull-up-enable bits;
+- reset value: `0xFF`;
+- saved state;
+- read returns current state;
+- write stores the byte.
 
-## C. Implement only the external latch in `alphasma3k_state`
+For Port-A pins configured as inputs and selected as GPIO, `PADATA` must use the input callback when one is connected; when no callback is connected, the documented pull-up state must provide the deterministic fallback instead of hardwired zero.
 
-Add only what is needed for this board component:
+Preserve existing output-latch behavior for Port-A outputs.
 
-1. one 8-bit latch state variable;
-2. `save_item()` registration;
-3. deterministic initialization/reset;
-4. a write handler and program-map entry at the supported decode/window;
-5. optional narrow logging only if useful for validation and not noisy.
+Do not silently change original-MC68328 behavior. If shared base helpers/state are the cleanest implementation, ensure the original device retains its previous externally visible behavior unless the processor documentation independently justifies a correction.
 
-Reset-value rule:
+Do **not** map anything at `0xFFFFF403` for EZ.
 
-- the physical power-on value has not been established;
-- choose a deterministic emulator reset value appropriate for safe/no-column-active behavior, preferably `0xFF` if consistent with the scan polarity and existing Phase-1 behavior;
-- explicitly document it as an **emulator initialization choice**, not a measured hardware reset fact.
+---
 
-The handler must retain the written byte so the Phase-1 `0xFF` write can be demonstrated as mapped and stored.
+## C. Required behavior — SCR.WDTH8 / internal Port-A selection
 
-Do **not** in this task:
+Audit the current `mc68ez328_device::scr_w()` implementation against the manual and correct only the demonstrated selection-state defect.
 
-- connect latch bits to a keyboard matrix;
-- add PA callbacks;
-- add PD callbacks;
-- add `INPUT_PORTS` keys;
-- implement PAPUEN;
-- implement PDSEL;
-- implement PDKBEN/PKBDINT;
-- modify `mc68328.cpp` or `mc68328.h`;
-- execute `KeyboardInitializeModulePhase2`;
-- modify LCD behavior;
-- modify diagnostic ROM definitions unless absolutely required (it should not be).
+Required end state:
 
-## D. Build and static checks
+- when `SCR.WDTH8` selects 8-bit operation / Port-A GPIO, internal Port-A selection must become the corresponding GPIO-selected state;
+- when that bit is cleared, internal selection must return to the documented non-GPIO/data-bus state rather than remaining latched from an earlier set, if that is what the current code incorrectly does;
+- the EZ save-state path must preserve the internal Port-A selection state, or it must be reliably derived from another saved register on restore in a way consistent with MAME save-state conventions.
 
-Run:
+Do not create an externally visible EZ PASEL register at `0xFFFFF403`.
+
+Do not change unrelated SCR bits or chip-select behavior.
+
+---
+
+## D. Scope restrictions
+
+Do not implement in this task:
+
+- PDSEL;
+- PDKBEN / PKBDINT;
+- PDIRQEN/PDPOL/PDIQEG fixes;
+- keyboard matrix callbacks;
+- PA0–PA6 driver column plumbing;
+- PD0–PD7 row callbacks;
+- `INPUT_PORTS` or key mappings;
+- Keyboard Phase 2;
+- new LCD behavior;
+- dynamic chip-select remapping;
+- any new ROM definition or fixture.
+
+Do not modify `src/mame/skeleton/alphasma3k.cpp` unless a build-only include/context adjustment is absolutely unavoidable. The already validated latch and LCD bridge should remain byte-for-byte untouched if possible.
+
+---
+
+## E. Build and static checks
+
+Run the reduced build without clean:
 
 ```sh
 make SUBTARGET=alphasma3k SOURCES=src/mame/skeleton/alphasma3k.cpp OSD=sdl REGENIE=1 -j2
 ```
 
-No clean build.
-
-Then verify:
+Verify:
 
 - build succeeds;
-- four drivers are still present;
-- `git diff --check` passes;
-- `asma3kdi` and `asma3kdv` ROM audits remain good with the existing local fixtures.
+- all four AS3K drivers remain present;
+- `./alphasma3k -verifyroms asma3kdi` is good;
+- `./alphasma3k -verifyroms asma3kdv` is good;
+- `git diff --check` passes.
 
-Do not run original `asma3k`.
+Do not execute original `asma3k`.
 
-## E. Narrow dynamic validation
+---
 
-Create a local-only debugger script under `../diagnostic/`, for example:
+## F. Narrow dynamic validation on `asma3kdv`
 
-`as3kdv_keyboard_latch.cmd`
+Create a local-only debugger script under `../diagnostic/`, e.g.:
 
-Use explicit `0x...` literals.
+`as3kdv_keyboard_porta.cmd`
 
-Run only `asma3kdv` with an 8-second safety limit.
+Use explicit `0x...` literals everywhere.
 
-The script must:
+The run must stop before `KeyboardInitializeModulePhase2`.
 
-1. mark Phase-1 entry `0x0042E2A8`;
-2. watch the exact latch transaction at `0x00600000`;
-3. verify the write data is `0xFF`;
-4. immediately after the write, prove the driver's saved latch state has become `0xFF` using the narrowest practical evidence available (handler log, debugger-visible mapping/state if exposed, or a temporary local diagnostic observation that is removed before commit);
-5. confirm the access no longer produces the previous unmapped `0x00600000` message;
-6. continue through the Phase-1 RTS and caller return `0x00420168` with `D0 = 0`;
-7. include safety breaks for Phase 2, keyboard interrupt handler, `InterruptInstallHandler`, and the established exception handlers.
+At minimum prove the following on the real AlphaWord Phase-1 path after the core change:
 
-Do not scan keys and do not continue beyond the caller return.
+1. Startup writes SCR with the established value used by this fixture (`0x1D` from the linked initialization path), and the EZ Port-A selection state used by `PADATA` is consistent with `WDTH8` being active.
+2. At Phase-1 entry, PAPUEN is mapped and its first read returns the documented reset value `0xFF` unless earlier firmware writes prove otherwise.
+3. The Phase-1 `PAPUEN &= 0x80` sequence therefore writes the value dictated by the actual prior read (normally expected `0x80` from reset `0xFF`). Record the observed value; do not force it if earlier firmware changed the register.
+4. The former PAPUEN unmapped diagnostic at `0xFFFFF402` disappears for the PAPUEN byte lane.
+5. The AlphaSmart access to reserved `0xFFFFF403` remains harmless and is **not** serviced by a newly invented EZ register.
+6. PADIR/PADATA writes remain finite and Phase 1 still reaches its RTS and caller return `0x00420168` with `D0 = 0`.
+7. The already implemented latch write at `0x00600000 = 0xFF` remains mapped; its old unmapped message must not reappear.
+8. No Phase 2, keyboard interrupt handler, `InterruptInstallHandler`, or established exception handler fires.
 
-If the new mapping causes an exception, wrong byte-lane behavior, repeated/mirrored writes inconsistent with evidence, or regression before caller return, stop and report before broadening the patch.
+Because prior debugger byte readback of mapped GPIO registers was ambiguous, use the narrowest reliable method to prove retained Port-A state. Prefer normal debugger program-space reads if they now behave consistently. If they remain ambiguous, use temporary diagnostic logging inside the relevant core handlers to demonstrate state and remove every temporary log before the final build/commit. Do not patch AlphaWord or a ROM fixture to manufacture a readback test.
 
-## F. Regression boundary
+### Optional micro-check for WDTH8 clearing
 
-Confirm that this driver-only latch change does not alter previously validated unrelated behavior:
+If existing debugger commands can safely write/read SCR without patching ROM or broadening execution, you may perform one local-only controlled micro-check that toggles WDTH8 and demonstrates internal Port-A selection follows both set and clear transitions, restoring the original SCR before continuing. Do this only if the syntax and side effects are already understood. Otherwise validate the clear path by source/manual reasoning and report that dynamic AlphaWord coverage exercises only the set state.
 
-- `asma3kdi` startup diagnostic remains valid/auditable;
-- `asma3kdv` valid-AlphaWord path still reaches and returns from Phase 1;
-- no MAME core file changed;
-- LCD bridge source is unchanged except unavoidable context lines.
+---
 
-A full re-run of every LCD debugger script is not required unless the code diff unexpectedly touches LCD-related logic.
+## G. Regression / publication boundary
 
-## G. Publication and public handoff
+After validation:
 
-At the end:
+1. remove all temporary logging/instrumentation;
+2. rebuild final source if temporary instrumentation affected compiled files;
+3. `git diff --check`;
+4. inspect `git status --short` and exact diff;
+5. ensure no ROM, firmware, historical binary/source archive, CGROM, diagnostic fixture/script/log, generated executable, or build artifact is staged.
 
-1. run `git diff --check`;
-2. inspect `git status --short`;
-3. inspect the exact diff;
-4. ensure no `roms/`, proprietary firmware, historical binary/source archive, CGROM, diagnostic fixture, local debugger script/log, generated binary, or build artifact is staged;
-5. replace `docs/as3k/CODEX_RESULT.md` with a factual report containing:
-   - exact driver changes;
-   - exact map range and byte-lane handling chosen, with evidence;
-   - reset value and explicit statement that it is an emulator choice if hardware reset is unknown;
-   - build/audit result;
-   - observed latch write and retained value;
-   - whether the old unmapped message disappeared;
-   - Phase-1 RTS/caller-return result and D0;
-   - safety-break result;
-   - final `git diff --check` and status;
-6. update `docs/as3k/STATUS.md` only if necessary to keep the public handoff factual after the implementation;
-7. commit only safe source/documentation changes;
-8. push only to `as3k-project/as3k-mame0289-dev`.
+`docs/as3k/CODEX_RESULT.md` must report factually:
+
+- exact core files changed;
+- exact PAPUEN state/map/reset/save implementation;
+- how PADATA fallback was changed and why original MC68328 behavior is preserved;
+- exact `SCR.WDTH8` selection/save-state correction;
+- explicit confirmation that no EZ PASEL was mapped at `0xFFFFF403`;
+- build and ROM-audit results;
+- dynamic PAPUEN read/write values observed in Phase 1;
+- whether unmapped PAPUEN diagnostics disappeared;
+- retained PADIR/PADATA evidence and any remaining debugger-space ambiguity;
+- latch regression result;
+- Phase-1 RTS/caller-return and `D0`;
+- safety-break results;
+- whether WDTH8 clear behavior was dynamically exercised or only statically validated;
+- final `git diff --check`, status, commit SHA, and push result.
+
+Update `docs/as3k/STATUS.md` to keep the public handoff factual if the implementation passes.
+
+Commit only safe core/documentation changes and push only to `as3k-project/as3k-mame0289-dev`.
 
 ## Pass criteria
 
-Pass means all of the following are true:
+Pass means:
 
-- the external board latch is modeled in `alphasma3k_state` without a core modification;
-- Phase 1 writes `0xFF` through the correct byte lane and the latch retains `0xFF`;
-- the old unmapped `0x00600000` message is gone;
-- Phase 1 still returns normally to `0x00420168` with `D0 = 0`;
-- no Phase 2/interrupt/error handler is entered;
-- build and existing diagnostic audits pass;
-- only safe driver/documentation changes are committed and pushed.
+- PAPUEN exists for EZ with correct reset/read/write/save semantics;
+- Port-A input fallback honors PAPUEN without changing original MC68328 externally visible behavior;
+- `SCR.WDTH8` controls the internal EZ Port-A selection state correctly and that state is save-state safe;
+- no fake PASEL register exists at `0xFFFFF403`;
+- Phase 1 observes mapped PAPUEN behavior and still returns normally with `D0 = 0`;
+- the external latch remains mapped and valid;
+- no later keyboard/interrupt stage was entered or implemented;
+- final build/audits pass and only safe changes are pushed.
 
 ## Stop condition
 
-Stop after validating the external latch and publishing the result.
+Stop after this **Port-A core-fidelity stage** is implemented, validated, documented, committed, and pushed.
 
-**Do not add the keyboard matrix, key mappings, PAPUEN, PDSEL, PDKBEN/PKBDINT, or execute Phase 2 in this task.**
+**Do not add the keyboard matrix, PDSEL, PDKBEN/PKBDINT, key mappings, or execute Keyboard Phase 2 in this task.**
