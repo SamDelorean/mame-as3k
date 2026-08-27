@@ -1,170 +1,233 @@
-# Current Codex task — execute and validate `SystemInstallExceptionVectors`
+# Current Codex task — study `KeyboardInitializeModule` before execution
 
 Date: 2026-08-26
 
-Read `AGENTS.md` and the current `docs/as3k/CODEX_RESULT.md` first.
+Read `AGENTS.md`, `docs/as3k/STATUS.md`, and the current `docs/as3k/CODEX_RESULT.md` first.
 
-## Established evidence
+## Established state
 
-The static study of `SystemInstallExceptionVectors` is complete and published.
+The normal valid-AlphaWord path is now dynamically validated through the entry of:
 
-Treat these facts as established:
+`KeyboardInitializeModule = 0x0042E2A8`
 
-- entry: `0x00430504`;
-- RTS: `0x00430524`;
-- the routine performs exactly four architectural `MOVE.L` stores and no helper calls;
-- vector 2 at `0x00000008` must become `0x00430526` (`SystemBusError`);
-- vector 3 at `0x0000000c` must become `0x004305b0` (`SystemAddressError`);
-- vector 4 at `0x00000010` must become `0x0043063a` (`SystemIllegalInstruction`);
-- vector 5 at `0x00000014` must become `0x004306c4` (`SystemDivideByZeroError`);
-- each 32-bit write is expected to appear in the MAME debugger as two big-endian 16-bit transactions;
-- the four installed handlers are diagnostic/error paths and must **not** execute during normal initialization;
-- Startup Manager TRAP 0 at `0x00000080` and InterruptInitializeModule vectors at `0x00000110`, `0x00000114`, `0x00000118` must remain intact;
-- the next primary-module call is `KeyboardInitializeModule = 0x0042e2a8`.
+The immediately preceding primary-module sequence has passed:
 
-This task is a **narrow dynamic validation only**. Do not enter keyboard code and do not modify MAME source.
+- `InterruptInitializeModule = 0x0043177E`;
+- `TimerInitializeModule = 0x004310BE`;
+- `LCDInitializeModule = 0x0043074E`;
+- `SystemInstallExceptionVectors = 0x00430504`.
 
-## Goal
+The latest dynamic test installed the expected bus/address/illegal/divide-by-zero vectors, preserved TRAP 0 and level-4/5/6 vectors, and reached `0x0042E2A8` without entering keyboard code.
 
-Execute `SystemInstallExceptionVectors` on `asma3kdv`, prove the exact four vector values written to low RAM, verify none of the installed exception handlers fires, and stop at the first instruction boundary of `KeyboardInitializeModule` before any keyboard instruction executes.
+Treat these hardware facts from the project evidence as hypotheses to verify against the keyboard source/listing, not as substitutes for that source:
+
+- AS3K keyboard matrix is expected to be 15 columns × 8 rows;
+- external write latch window is expected at `0x00600000` and supplies columns X1–X8;
+- Port A lines are expected to supply columns X9–X15;
+- Port D lines are expected to read rows Y1–Y8;
+- `INTERRUPT_KEYBOARD_4` was previously identified from `InterruptModule.o.lst` as mask/value `0x40`.
+
+The exact initialization behavior, polarity, GPIO register programming, interrupt setup, globals, and linked call graph must now be derived from the historical keyboard source/listing and exact Flash-linked AlphaWord bytes.
+
+This task is **static only**.
+
+**Do not execute `KeyboardInitializeModule`.**
+**Do not modify MAME source.**
+**Do not rebuild.**
+**Do not implement input ports or the external latch yet.**
 
 ---
 
 ## A. Repository gate
 
-From `~/Projects/alphasmart-as3k/mame0289`:
+From:
+
+`~/Projects/alphasmart-as3k/mame0289`
 
 1. `git pull --ff-only as3k-project as3k-mame0289-dev`.
-2. Confirm branch is `as3k-mame0289-dev`.
-3. Confirm tracked `git status --short` is clean.
-4. Confirm current branch contains static-study commit `4b3f5e065fdf8e694dbe86d1cafb819a67ec4cb0` or a clean descendant.
+2. Confirm branch is `as3k-mame0289-dev` and tracked status is clean.
+3. Confirm the branch contains exception-vector validation commit `72b9935edfafe270e91becdd30fb7459c6f07a03` or a clean descendant.
+4. Confirm public handoff `docs/as3k/STATUS.md` exists.
 5. Run `git diff --check`.
 
-Do not edit `src/mame/skeleton/alphasma3k.cpp`, `mame.lst`, any MAME core, ROM definition, or fixture.
-
-No rebuild should be necessary unless the existing `./alphasma3k` executable is missing. If a rebuild is unexpectedly required, stop and report rather than broadening the task.
+Do not edit `src/mame/skeleton/alphasma3k.cpp`, `src/mame/mame.lst`, any MAME core, ROM definition, fixture, or generated file.
 
 ---
 
-## B. Create one local debugger script
+## B. Locate the original keyboard source and listings
 
-Create local-only:
+Search the local archived AS3000 development material, especially `/Users/sperezc/Downloads/AlphaSmart.iso`, for the artifacts corresponding to keyboard initialization.
 
-`../diagnostic/as3kdv_exception_vectors.cmd`
+Prioritize original files such as:
 
-Use explicit `0x...` literals everywhere.
+- `Software/ModuleSources/KeyboardModule.c` and related headers;
+- `KeyboardModule.o.lst` or equivalent object listing;
+- `AWordRAM01.out`, map/symbol output, or linked listings used in prior stages;
+- any hardware-definition headers referenced by the keyboard module, including DragonBall GPIO/register constants and write-latch definitions.
 
-Start from this plan, adapting only if MAME 0.289 debugger syntax demonstrably requires a small correction:
+Report exact file paths used.
 
-```text
-temp0 = 0
-bp 0x00430504,1,{ temp0 = 1 ; logerror "AS3KDV_EXCEPTION_INSTALL_ENTRY PC=%08X A7=%08X SR=%04X\n",pc,sp,sr ; g }
-wp 0x00000008,0x4,w,temp0==1,{ logerror "AS3KDV_VECTOR2 ADDR=%08X DATA=%08X PC=%08X\n",wpaddr,wpdata,pc ; g }
-wp 0x0000000c,0x4,w,temp0==1,{ logerror "AS3KDV_VECTOR3 ADDR=%08X DATA=%08X PC=%08X\n",wpaddr,wpdata,pc ; g }
-wp 0x00000010,0x4,w,temp0==1,{ logerror "AS3KDV_VECTOR4 ADDR=%08X DATA=%08X PC=%08X\n",wpaddr,wpdata,pc ; g }
-wp 0x00000014,0x4,w,temp0==1,{ logerror "AS3KDV_VECTOR5 ADDR=%08X DATA=%08X PC=%08X\n",wpaddr,wpdata,pc ; g }
-bp 0x00430526,1,{ logerror "AS3KDV_UNEXPECTED_BUS_ERROR PC=%08X\n",pc ; quit }
-bp 0x004305b0,1,{ logerror "AS3KDV_UNEXPECTED_ADDRESS_ERROR PC=%08X\n",pc ; quit }
-bp 0x0043063a,1,{ logerror "AS3KDV_UNEXPECTED_ILLEGAL_INSTRUCTION PC=%08X\n",pc ; quit }
-bp 0x004306c4,1,{ logerror "AS3KDV_UNEXPECTED_DIVIDE_BY_ZERO PC=%08X\n",pc ; quit }
-bp 0x00430524,1,{ logerror "AS3KDV_EXCEPTION_INSTALL_RTS V2=%08X V3=%08X V4=%08X V5=%08X TRAP0=%08X LV4=%08X LV5=%08X LV6=%08X\n",d@0x00000008,d@0x0000000c,d@0x00000010,d@0x00000014,d@0x00000080,d@0x00000110,d@0x00000114,d@0x00000118 ; g }
-bp 0x0042e2a8,1,{ logerror "AS3KDV_KEYBOARD_ENTRY_STOP PC=%08X V2=%08X V3=%08X V4=%08X V5=%08X TRAP0=%08X LV4=%08X LV5=%08X LV6=%08X\n",pc,d@0x00000008,d@0x0000000c,d@0x00000010,d@0x00000014,d@0x00000080,d@0x00000110,d@0x00000114,d@0x00000118 ; quit }
-g
-```
+Identify and distinguish at minimum:
 
-Important:
+- `KeyboardInitializeModule`;
+- `KeyboardInitializeModulePhase2` if present;
+- keyboard interrupt handler(s);
+- low-level matrix scan/read helper(s) directly relevant to initialization;
+- any debounce/repeat/timer helper directly invoked during initialization.
 
-- Breakpoint/log PC may appear +2 because of the already documented debugger behavior; do not treat that alone as failure.
-- If `d@` formatting is unsupported in this context, use the already proven MAME debugger memory-expression syntax and document the exact correction.
-- Do not place a breakpoint *inside* `KeyboardInitializeModule`; the stop at its entry must quit before its first instruction executes.
+Do not recursively reverse engineer the entire keyboard subsystem.
 
 ---
 
-## C. Execute only the established no-LCD valid-AlphaWord diagnostic
+## C. Correlate the exact Flash-linked `KeyboardInitializeModule`
 
-Run only:
+Using `AWordApplet02.bin` and the historical listing/symbol material, determine precisely:
 
-```sh
-./alphasma3k asma3kdv \
-  -debug \
-  -debugscript ../diagnostic/as3kdv_exception_vectors.cmd \
-  -log \
-  -seconds_to_run 8
-```
+1. entry address, expected `0x0042E2A8`;
+2. exact end/return address and byte length;
+3. every direct call made by the routine;
+4. every global RAM variable written/read during initialization;
+5. every MC68EZ328 internal register accessed;
+6. every external hardware address accessed, especially the `0x0060xxxx` write-latch window if present;
+7. every interrupt API call and exact interrupt constant/mask;
+8. whether the routine changes SR/interrupt mask directly;
+9. whether it contains loops, waits, asserts, or error paths that could hang on missing hardware;
+10. whether linked Flash bytes match the historical source/listing after accounting for relocations.
 
-Capture console output and preserve the resulting MAME log under local diagnostic names, for example:
-
-- `../diagnostic/as3kdv_exception_vectors_console.log`
-- `../diagnostic/as3kdv_exception_vectors.log`
-
-Do not stage diagnostic logs.
-
-`asma3kdv` intentionally removes the KS0066 devices. That is acceptable here because the LCD protocol has already been validated separately and this task tests only the exception-vector installer after the known LCD return.
+Provide exact addresses and access widths (byte/word/long), not just symbolic names.
 
 ---
 
-## D. Exact pass criteria
+## D. Reconstruct the keyboard electrical/software model needed by initialization
 
-The test passes only if all of the following are true:
+From source/listing evidence, determine exactly how the firmware expects the AS3K keyboard interface to behave.
 
-1. `SystemInstallExceptionVectors` entry is reached.
-2. Exactly the expected vector stores occur after entry.
-3. Reconstruct the writes as:
-   - `0x00000008`: high `0x0043`, low `0x0526` -> `0x00430526`;
-   - `0x0000000c`: high `0x0043`, low `0x05b0` -> `0x004305b0`;
-   - `0x00000010`: high `0x0043`, low `0x063a` -> `0x0043063a`;
-   - `0x00000014`: high `0x0043`, low `0x06c4` -> `0x004306c4`.
-4. The debugger shows the expected high-word then low-word behavior for each architectural `MOVE.L`.
-5. The RTS breakpoint at `0x00430524` is reached.
-6. Final longwords at RTS are exactly the four expected handler addresses.
-7. No breakpoint for `SystemBusError`, `SystemAddressError`, `SystemIllegalInstruction`, or `SystemDivideByZeroError` fires.
-8. Previously established vectors remain unchanged through the routine:
-   - TRAP 0 at `0x00000080`;
-   - level 4 at `0x00000110`;
-   - level 5 at `0x00000114`;
-   - level 6 at `0x00000118`.
-   Record their exact observed values and compare with the previously validated values.
-9. Execution reaches `KeyboardInitializeModule = 0x0042e2a8` before timeout.
-10. Quit at that entry without executing keyboard code.
+Document:
 
-Previously validated level-vector values are:
+- number of matrix columns and rows actually referenced by this build;
+- which columns are driven by the external latch and which by Port A;
+- exact Port A bits used;
+- exact Port D bits used for rows;
+- direction/select/pull-up register values written for Port A and Port D;
+- active polarity of column drive;
+- active polarity of row/key detection;
+- idle values expected with no key pressed;
+- whether multiple columns can be active simultaneously;
+- whether scanning uses one-hot, active-low, active-high, or another pattern;
+- exact external latch write address(es) and values used by initialization, if any;
+- whether the latch is write-only from firmware's perspective;
+- whether keyboard input relies on Port D data, edge/interrupt status, both, or something else;
+- which DragonBall interrupt source is used and how it is enabled/cleared/configured.
 
-- `0x00000110 = 0x00431a04`
-- `0x00000114 = 0x00431ab0`
-- `0x00000118 = 0x00431ae6`
-
-For TRAP 0, record the factual observed value rather than assuming an address if the prior exact value is not already established in local notes.
-
-If any installed exception handler fires, a vector value differs, the keyboard entry is not reached, or an unexplained exception/hang occurs: **stop and report. Do not modify the driver or attempt a fix in this task.**
+If some of these behaviors belong only to scan helpers and are not exercised during `KeyboardInitializeModule`, inspect only enough helper code to establish the hardware contract for the next emulator stage and state that boundary clearly.
 
 ---
 
-## E. Publication
+## E. Distinguish Phase 1 from `KeyboardInitializeModulePhase2`
 
-This task should not change MAME source.
+AlphaWord calls `KeyboardInitializeModulePhase2` later in `_AWord_Initialize`, after `SystemCheckBootSignature`.
+
+Determine, from source/listing only:
+
+- exact linked address of Phase 2;
+- what hardware/software work is deferred to Phase 2;
+- whether Phase 1 can complete independently of Phase 2;
+- whether Phase 1 installs the interrupt handler or Phase 2 does;
+- whether Phase 1 expects any key state or hardware event before returning.
+
+Do not execute or fully reverse engineer Phase 2 in this task.
+
+---
+
+## F. Check current MAME support against the exact Phase-1 requirements
+
+Inspect MAME 0.289 source only as needed. Do not edit it.
+
+Compare the static keyboard requirements with the current driver/core:
+
+- `src/mame/skeleton/alphasma3k.cpp` currently has empty `INPUT_PORTS`;
+- the production write-latch behavior is not yet implemented in the driver;
+- the MC68EZ328 core exposes Port A and Port D GPIO callbacks/register handlers.
+
+For each hardware operation actually required by `KeyboardInitializeModule`, classify it as:
+
+1. already modeled correctly;
+2. modeled by the MC68EZ328 core but not connected in the AS3K driver;
+3. absent from the AS3K driver and requiring a local device/latch/input implementation;
+4. potentially absent/incorrect in the MC68EZ328 core itself.
+
+Do not infer a core bug merely because the AS3K driver has not connected a callback.
+
+If the keyboard initializer touches a register the core does not implement, identify the exact register and source evidence.
+
+---
+
+## G. Design the next narrow dynamic test, but do not run it
+
+Based on the static result, specify an exact debugger plan for the following task.
+
+The next test should execute **only `KeyboardInitializeModule` Phase 1**, observe its hardware/global writes, and stop immediately after it returns, before the next higher-level initialization work proceeds.
+
+Design breakpoints/watchpoints for:
+
+- entry `0x0042E2A8`;
+- exact Port A/Port D registers written/read by Phase 1;
+- exact external latch range if Phase 1 touches it;
+- exact keyboard globals initialized;
+- `InterruptInstallHandler` call/result if used;
+- keyboard interrupt handler breakpoint as a fail/safety condition if it should not fire during initialization;
+- assert/error helper if one exists;
+- exact return/next-call boundary determined from the linked caller.
+
+Use explicit `0x...` numeric literals throughout.
+
+State the exact expected values for every watched register/global where source/listing evidence makes them deterministic.
+
+If Phase 1 is predicted to hit missing latch/input hardware before returning, design the test to stop on that first demonstrated dependency rather than adding an emulator fix preemptively.
+
+---
+
+## H. Public-documentation implications
+
+Do not edit `STATUS.md` in this task, but include in `CODEX_RESULT.md` a concise section titled `Public handoff implications` containing:
+
+- the new execution/hardware facts another developer would need;
+- the exact first missing emulator component, if one is identified;
+- what remains unproven;
+- the recommended next dynamic test.
+
+This lets the coordinating step update the public status document without relying on chat history.
+
+---
+
+## I. Publication
+
+This is a no-source-change task.
 
 At the end:
 
 1. `git diff --check`.
 2. `git status --short`.
-3. Confirm no MAME source, ROM, fixture, generated binary, or diagnostic log is staged.
-4. Replace `docs/as3k/CODEX_RESULT.md` with a factual report containing:
-   - command and script used;
-   - entry/RTS/keyboard-stop observations;
-   - every watchpoint transaction with address/data/PC;
-   - reconstructed final vector values;
-   - confirmation of high-word/low-word order;
-   - observed preserved TRAP 0 and level 4/5/6 vectors;
-   - whether any unexpected exception handler fired;
-   - whether keyboard entry was reached before timeout;
-   - confirmation keyboard code was not executed;
-   - `git diff --check` and final status;
-   - documentation commit SHA and push result.
+3. Confirm no MAME source, ROM, fixture, proprietary artifact, diagnostic binary, or generated file changed.
+4. Replace `docs/as3k/CODEX_RESULT.md` with a factual report containing at least:
+   - exact source/listing artifacts used;
+   - linked address range and return;
+   - direct calls and relevant helper symbols/addresses;
+   - all RAM globals initialized;
+   - all Port A/Port D/internal-register accesses;
+   - external-latch accesses;
+   - matrix geometry and polarities supported by evidence;
+   - interrupt setup and handler address;
+   - Phase-1 versus Phase-2 responsibilities;
+   - current MAME support/gaps classified as above;
+   - exact next debugger test plan;
+   - `Public handoff implications` section;
+   - `git diff --check` and final status.
 5. Commit only the safe documentation result.
 6. Push only to `as3k-project/as3k-mame0289-dev`.
 
 ## Stop condition
 
-Stop immediately after proving `SystemInstallExceptionVectors` and reaching the entry of `KeyboardInitializeModule`.
+Stop after `KeyboardInitializeModule` Phase 1 is fully correlated statically and the next dynamic test is designed.
 
-**Do not execute or reverse engineer keyboard in this task. Do not modify MAME source.**
+**Do not execute keyboard code. Do not implement keyboard/latch/input ports. Do not modify MAME source or cores.**
