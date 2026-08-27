@@ -75,6 +75,7 @@ protected:
 
 	u8 m_lcd_port_c_pending = 0;
 	u8 m_lcd_port_c_applied = 0;
+	u8 m_keyboard_column_latch = 0xff;
 
 	virtual void machine_start() override ATTR_COLD;
 	virtual void machine_reset() override ATTR_COLD;
@@ -83,6 +84,7 @@ private:
 	void alphasmart3k_palette(palette_device &palette) const;
 	u32 screen_update(screen_device &screen, bitmap_ind16 &bitmap, const rectangle &cliprect);
 	void main_map(address_map &map) ATTR_COLD;
+	void keyboard_column_latch_w(u8 data);
 	void lcd_port_c_w(unsigned bit, int state);
 	void lcd_port_c_commit();
 	u8 lcd_data_r();
@@ -107,6 +109,7 @@ void alphasmart3k_state::machine_start()
 
 	save_item(NAME(m_lcd_port_c_pending));
 	save_item(NAME(m_lcd_port_c_applied));
+	save_item(NAME(m_keyboard_column_latch));
 }
 
 void alphasmart3k_state::machine_reset()
@@ -117,6 +120,13 @@ void alphasmart3k_state::machine_reset()
 
 	m_lcd_port_c_pending = 0;
 	m_lcd_port_c_applied = 0;
+	// The hardware power-on state is unknown; default to no active-low columns.
+	m_keyboard_column_latch = 0xff;
+}
+
+void alphasmart3k_state::keyboard_column_latch_w(u8 data)
+{
+	m_keyboard_column_latch = data;
 }
 
 void alphasmart3k_state::lcd_port_c_w(unsigned bit, int state)
@@ -227,6 +237,8 @@ void alphasmart3k_state::main_map(address_map &map)
 {
 //  map(0x0000'0000, 0x0003'ffff).ram().share("ram");
 	map(0x0040'0000, 0x004f'ffff).rom().region("ipl", 0);
+	// The 32 KiB chip-select window is known, but source only proves this byte address is decoded.
+	map(0x0060'0000, 0x0060'0001).w(FUNC(alphasmart3k_state::keyboard_column_latch_w)).umask16(0xff00);
 }
 
 static INPUT_PORTS_START( alphasmart3k )

@@ -12,7 +12,7 @@ The valid-AlphaWord diagnostic path has executed through **`KeyboardInitializeMo
 
 `KeyboardInitializeModulePhase2 = 0x0042E2F0` has **not** been executed.
 
-The MC68EZ328 keyboard-related GPIO audit is now complete. The next implementation stage is deliberately narrow: add only the AS3K board's external 8-bit keyboard column latch at `0x00600000`, preserve it as driver state, validate the already-observed Phase-1 write, and stop before adding the matrix, key mappings, Phase 2, or CPU-core changes.
+The MC68EZ328 keyboard-related GPIO audit and the first driver-only implementation stage are complete. The AS3K board's external 8-bit keyboard column latch at `0x00600000` is mapped, saved, deterministically reset, and validated through the existing Phase-1 path. The matrix, key mappings, Phase 2, and CPU-core changes remain deferred.
 
 ## Validated milestones
 
@@ -65,7 +65,13 @@ Historical AlphaSmart source/listings establish a **15-column × 8-row** keyboar
 
 `KeyboardInitializeModule` Phase 1 is a 72-byte leaf at `0x0042E2A8–0x0042E2EF`, RTS `0x0042E2EE`. It has no calls, globals, loops, waits or interrupt installation. The dynamic test observed the exact 12 expected transactions and returned to `0x00420168` with `D0 = 0`. Phase 2, the keyboard interrupt handler and CPU exception handlers were not entered.
 
-The external latch write `0x00600000 = 0xFF` is currently unmapped but nonfatal. PAPUEN and the AlphaSmart write to `0xFFFFF403` are also nonfatal in the current core.
+The external latch write `0x00600000 = 0xFF` is now mapped on the high byte lane and retained by driver state. Phase 1 still returns normally to `0x00420168` with `D0 = 0`. PAPUEN and the AlphaSmart write to `0xFFFFF403` remain nonfatal in the current core.
+
+### External keyboard column latch
+
+The driver models the write-only 8-bit latch at the only firmware-proven byte address, `0x00600000`, using the high byte lane of the 16-bit program bus. The board's 32 KiB chip-select window is established, but the available source does not prove that the latch ignores all address lines throughout that window, so broader mirroring is deliberately not asserted.
+
+The latch is save-state registered and resets to `0xFF`, an emulator initialization choice that leaves all active-low columns inactive; it is not a measured hardware power-on value. Bounded `asma3kdv` validation observed and retained the Phase-1 `0xFF` write, eliminated the old unmapped-access message, and reached the Phase-1 RTS and caller return with `D0 = 0` without entering Phase 2, interrupt code, or exception handlers.
 
 ## MC68EZ328 keyboard GPIO audit
 
@@ -91,7 +97,7 @@ A previous debugger readback of zero after writes to mapped GPIO registers remai
 
 Development should remain staged:
 
-1. **Driver-only external latch at `0x00600000`** — implement and validate by itself.
+1. **Driver-only external latch at `0x00600000`** — complete and dynamically validated.
 2. **EZ Port-A core fidelity** — PAPUEN plus correct/saveable `SCR.WDTH8` selection behavior; do not add a fake PASEL register.
 3. **Driver matrix plumbing** — connect PA0–PA6 outputs and latch X1–X8 to PD0–PD7 row evaluators, with externally idle-high rows and support for multiple active-low columns.
 4. **EZ PDSEL fidelity** — add correct upper-nibble mux state/behavior.
@@ -110,6 +116,7 @@ The branch currently models or assumes:
 - 1 MiB Flash window at `0x00400000`;
 - static final memory map plus reset-time vector-copy workaround;
 - two KS0066-compatible LCD controllers through Port C;
+- saved write-only external keyboard column latch at `0x00600000`;
 - one composite 40×4 LCD screen.
 
 Historical AlphaSmart material supports the production map of 256 KiB SRAM, 1 MiB Flash and an external write-latch window at `0x00600000`. Dynamic DragonBall chip-select remapping is not yet reproduced.
@@ -128,18 +135,17 @@ Executable: `./alphasma3k`
 
 ## Known gaps
 
-The emulator is not yet a complete usable AlphaSmart 3000. Remaining work includes the external keyboard latch, EZ PAPUEN/Port-A fidelity, PA/latch-to-PD matrix plumbing, PDSEL, later PDKBEN keyboard interrupt behavior, actual MAME input-port/key mapping, Phase 2 and later AlphaWord modules, dynamic chip-select/remapping fidelity, power/battery behavior, UART/RS-232, ADB, PS/2, IrDA, USB/PDIUSBD11D, Flash update/write behavior, measured LCD timing/colors, exact controller confirmation, and an explicit synthetic four-row visual fixture.
+The emulator is not yet a complete usable AlphaSmart 3000. Remaining work includes EZ PAPUEN/Port-A fidelity, PA/latch-to-PD matrix plumbing, PDSEL, later PDKBEN keyboard interrupt behavior, actual MAME input-port/key mapping, Phase 2 and later AlphaWord modules, dynamic chip-select/remapping fidelity, power/battery behavior, UART/RS-232, ADB, PS/2, IrDA, USB/PDIUSBD11D, Flash update/write behavior, measured LCD timing/colors, exact controller confirmation, and an explicit synthetic four-row visual fixture.
 
 ## Next development step
 
-Implement **only** the AS3K external keyboard latch in the driver:
+Implement **only** the next EZ Port-A core-fidelity stage:
 
-- saved 8-bit latch state in `alphasma3k_state`;
-- write mapping for the board decode at `0x00600000` (respecting the known 32 KiB chip-select window while modeling the real byte-wide latch semantics correctly);
-- deterministic emulator reset state documented as an emulator choice if the physical power-on value remains unknown;
-- no matrix callbacks, no input ports, no Phase 2, and no MC68EZ328 core modification yet;
-- rebuild the reduced subtarget and repeat only enough of the existing Phase-1 diagnostic to prove the `0xFF` write is now mapped/retained and normal return still occurs;
-- preserve `asma3kdi`/`asma3kdv` startup behavior and existing LCD regressions as appropriate.
+- add PAPUEN state, reset/save handling, mapping, and Port-A input pull-up fallback;
+- make the existing `SCR.WDTH8` Port-A selection state accurate and saveable without adding a fake EZ PASEL register at reserved address `0xFFFFF403`;
+- validate this core change independently before adding driver matrix callbacks or key mappings;
+- do not execute Phase 2 or add PDSEL/PDKBEN interrupt behavior in the same stage;
+- preserve the validated external latch, `asma3kdi`/`asma3kdv` startup behavior, and LCD bridge behavior.
 
 The evidence-first development method remains: original source/listings → exact linked behavior → narrow dynamic test → static core audit where needed → minimum demonstrated implementation → regression test → public documentation.
 
