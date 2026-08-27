@@ -1,69 +1,78 @@
-# Codex result — `asma3kdvl` LCD-controller experiment
+# Codex result — LCD Port C atomicity hypothesis
 
 Date: 2026-08-26
 
-Status: experiment stopped at the first unexplained failure. The build and ROM-loading gates passed, but the test remained in the LCD busy loop and did not reach the final breakpoint at `0x0043079e` within 8 seconds. No speculative source fix was attempted.
+Status: **confirmed with one timing refinement**. The per-bit Port C callback ordering converts the final falling edge of each 4-bit busy read into an unintended control write. No bridge fix was implemented.
 
-## Git/bootstrap and Codex automation
+## First stuck operation
 
-- Worktree: `/Users/sperezc/Projects/alphasmart-as3k/mame0289`.
-- Base verified before attachment: `f34f02505e32c1993c6a782b6814232cbfc74e36`.
-- Added remote `as3k-project` at `https://github.com/SamDelorean/mame-as3k.git`.
-- Local branch `as3k-mame0289-dev` tracks `as3k-project/as3k-mame0289-dev`.
-- The pre-existing changes in `src/mame/mame.lst` and `src/mame/skeleton/alphasma3k.cpp` were preserved intact while attaching the worktree.
-- Local CLI: `codex-cli 0.149.1`. Its supported non-interactive syntax is `codex exec [OPTIONS] [PROMPT]`, with `-` reading the prompt from stdin; `--approve-for-me` provides safe automation in the workspace-write sandbox.
-- Created executable `scripts/as3k/codex-next.sh`. Future invocation from this worktree: `./scripts/as3k/codex-next.sh`.
-- The wrapper verifies the branch, runs `git pull --ff-only as3k-project as3k-mame0289-dev`, feeds `AGENTS.md` and `docs/as3k/CODEX_NEXT.md` to `codex exec --approve-for-me -C "$repo_root" -`, propagates failure, then prints this result file and `git status --short`.
+- Both `LCD_Reset` calls completed: E1/TOP first and E2/BOTTOM second, each with four normal write/busy-poll sequences (`0x06`, `0x0c`, `0x01`, `0x80`).
+- After reset, an E1/TOP `LCD_WriteByte(data=0x0c, RS=1 argument meaning command/control, E1=1, E2=1)` at entry stack `A7=0x0003ff8c` completed its initial busy poll and performed the intended write.
+- The next E1/TOP `LCD_WriteByte(data=0x80, RS=1, E1=1, E2=1)` at entry stack `A7=0x0003ff98` became stuck in its **pre-write busy poll**. Its intended `0x80` write was never reached.
+- Static linkage places these post-reset calls in `LCDMoveCursor`, called by LCD initialization at `0x0043078c` with line 1, column 1. The failing operation is therefore the cursor-position command in `LCDMoveCursor`, not either `LCD_Reset`.
+- The first stuck read reconstructed high nibble `0x8`, low nibble `0xf`, byte `0x8f` at `PC=0x00430e34`, with `A7=0x0003ff88`.
 
-## Source and local fixture
+## Exact bridge sequence and controller effect
 
-- Added the `asma3kdvl` ROM definition using the same IPL filename/checksums as `asma3kdv`.
-- Added `asma3kdvl` as a clone of `asma3kdv` using the full `alphasmart3k` machine configuration and added it to `src/mame/mame.lst`.
-- Created local-only ignored `roms/asma3kdvl/ks0066_f05.bin`; no AlphaWord fixture was copied to the child set.
-- Synthetic CGROM verification: 4096 bytes; CRC32 `c71c0011`; SHA1 `1ceaf73df40e531df3bfb26b4fb7cd95fb7bff1d`; SHA256 `ad7facb2586fc6e966c004d7d1d16b024f5805ff7cb47c7a85dabd8b48892ca7`.
-- `git diff --check` passed before the build.
-
-## Build and metadata checks
-
-Command:
+For the final cleanup of the successful busy poll preceding the E1 `0x0c` write, the trace shows:
 
 ```text
-make SUBTARGET=alphasma3k SOURCES=src/mame/skeleton/alphasma3k.cpp OSD=sdl REGENIE=1 -j2
+AS3KBRIDGE_RW old=0 new=1 DB=f RS=0 E1=0 E2=0
+AS3KBRIDGE_E1 old=0 new=1 DB=f RW=1 RS=0
+AS3KBRIDGE_E1 old=1 new=0 DB=f RW=1 RS=0
+AS3KBRIDGE_E1 old=0 new=1 DB=f RW=1 RS=0
+AS3KDVL_BRIDGE_READ_COMBINED ... D6=00000000 D0=00000000
+AS3KBRIDGE_RW old=1 new=0 DB=f RS=0 E1=1 E2=0 DROP_WHILE_E_HIGH
+AS3KBRIDGE_E1 old=1 new=0 DB=f RW=0 RS=0
 ```
 
-- Incremental build completed and linked `alphasma3k`; log: `../diagnostic/rebuild_asma3kdvl.log`.
-- Build reported `4 driver(s) found`.
-- `./alphasma3k -listfull 'asma3k*'` listed `asma3k`, `asma3kdi`, `asma3kdv`, and `asma3kdvl`.
-- `-listxml asma3kdvl` reported `cloneof="asma3kdv" romof="asma3kdv"` and the IPL ROM as merged from the parent.
-
-## LCD-controller test
-
-Command:
+The same sequence immediately before the first stuck result is:
 
 ```text
-./alphasma3k asma3kdvl -debug -debugscript ../diagnostic/as3kdvl_lcd_controller.cmd -log -seconds_to_run 8
+AS3KDVL_BRIDGE_WRITEBYTE ... A7=0003FF98 ARG_DATA=00000080 ARG_RS=00000001 ARG_E1=00000001 ARG_E2=00000001
+AS3KBRIDGE_RW old=0 new=1 DB=f RS=0 E1=0 E2=0
+AS3KBRIDGE_E1 old=0 new=1 DB=f RW=1 RS=0
+AS3KBRIDGE_E1 old=1 new=0 DB=f RW=1 RS=0
+AS3KBRIDGE_E1 old=0 new=1 DB=f RW=1 RS=0
+AS3KDVL_BRIDGE_READ_COMBINED ... D6=00000080 D0=0000000F
+AS3KBRIDGE_RW old=1 new=0 DB=f RS=0 E1=1 E2=0 DROP_WHILE_E_HIGH
+AS3KBRIDGE_E1 old=1 new=0 DB=f RW=0 RS=0
+AS3KDVL_BRIDGE_FIRST_STUCK ... D0=0000008F D7=0000008F
 ```
 
-- Console: `../diagnostic/as3kdvl_lcd_controller_console.log`; debugger/error log: `../diagnostic/as3kdvl_lcd_controller.log`.
-- Loader found the synthetic F05 twice and emitted two expected `WRONG CHECKSUMS` warnings. It did not report `Required files are missing` or abort fatally, confirming that the IPL was found through parent `asma3kdv`.
-- Marker counts: `LCD_RESET_ENTRY=2`, `WRITEBYTE_ENTRY=10`, `READBYTE_ENTRY=345611`, `PCDATA_READ=691220`, `BUSY_BRANCH=345610`.
-- E1/TOP distinct PCDATA values: `0x50`, `0x58`, `0x5f`. E2/BOTTOM distinct PCDATA value: `0x90`.
-- Distinct read reconstructions:
-  - E1/TOP normal: high nibble `0x0`, low nibble `0x0`, byte `0x00`.
-  - E1/TOP stuck-busy: high nibble `0x8`, low nibble `0xf`, byte `0x8f`.
-  - E2/BOTTOM normal: high nibble `0x0`, low nibble `0x0`, byte `0x00`.
-- `byte & 0x80` was non-zero for the repeated E1/TOP `0x8f` behavior.
-- Busy branches: 9 exits to `0x00430e40` with byte `0x00`; 345601 loops to `0x00430e28` with byte `0x8f`.
-- No `LCD bus contention` and no simultaneous-controller-read warning occurred.
-- Both `LCD_Reset` calls completed their four write/read-busy sequences; execution then reached later writes. The subsequent E1/TOP operation remained busy.
-- The final breakpoint at `0x0043079e` was not reached before the time limit.
+Thus the state passed to `ks0066->e_w(0)` is exactly E falling, RW=0, RS=0, bridge nibble `0xf` / device DB input `0xf0`. In MAME 0.289, `hd44780_base_device::e_w()` therefore calls `control_write(0xf0)` on that edge.
 
-## Recovery, reconciliation, and publication
+The command reconstruction is exact:
 
-- Recovered completed local result commit `4c673eb6cf6a412b7f6bd9d11b14598e9885df35`; it contains only `docs/as3k/CODEX_RESULT.md` and `scripts/as3k/codex-next.sh`.
-- Fetched remote commit `411e5b78` and merged its current recovery handoff without discarding the completed local result or the uncommitted source diff. The merge commit is `f9807f77`.
-- Inspected the source/list diff, staged only those two tracked files, and committed the validated diagnostic systems and GPIO-to-KS0066 bridge as `2e9b5838` (`as3k: add LCD controller diagnostic system`).
-- `git diff --check` passed. No file below `roms/`, no diagnostic log, and no proprietary artifact was staged or committed.
-- Publication was attempted over HTTPS, but Git reported `could not read Username for 'https://github.com': Device not configured`. SSH was also checked after accepting GitHub's ED25519 host key and reported `Permission denied (publickey)`. Therefore the local branch is ready but cannot be pushed until GitHub credentials are configured in this environment.
-- Final tracked worktree status before committing this report: only `docs/as3k/CODEX_RESULT.md` is modified. After this report commit, the expected status is clean and the branch is ahead of `as3k-project/as3k-mame0289-dev` by four commits.
-- Local-only `roms/asma3kdvl/ks0066_f05.bin`, generated build products, and diagnostic logs remain ignored and outside Git.
+- A two-strobe control read leaves the 4-bit phase on the low nibble.
+- Before the post-reset E1 `0x0c` write, the prior instruction register is `0x80` from the last reset command.
+- The false cleanup write supplies low nibble `0xf`, completing `0x8f`.
+- `0x8f` is Set DDRAM Address and sets AC to `0x0f` plus busy.
+- The intended `0x0c` command subsequently executes, leaves AC at `0x0f`, and sets busy.
+- The next `LCD_WriteByte(0x80)` first polls busy and consequently reads high `0x8`, low `0xf`, or `0x8f`. Its cleanup again performs a false control write and refreshes busy, so the loop cannot expire.
+
+## Refinement and E2 result
+
+- The trace did **not** show DB changing to `0x0f` while E was high. Because PC0-PC3 are configured as inputs, their callbacks publish ones before PC4/RW and before the enable callback; DB is already `0x0f` while E is low. This refines step 3 of the proposed timeline but does not change the false-write mechanism.
+- RW always changed 1->0 before the relevant E falling edge, on both E1 and E2.
+- E2 shows the same ordering on every captured reset busy poll: `DB=f`, RW 1->0 while E2=1, then E2 falls with RW=0 and RS=0. E2 did not become stuck in this run because execution stopped at the first E1 `0x8f`, but it is exposed to the same bridge defect.
+
+## Commands, artifacts, and cleanup
+
+- Safe update: `git pull --ff-only as3k-project as3k-mame0289-dev` (already up to date).
+- Incremental build, no clean: `make SUBTARGET=alphasma3k SOURCES=src/mame/skeleton/alphasma3k.cpp OSD=sdl REGENIE=1 -j2` (passed; 4 drivers found and linked `alphasma3k`).
+- Narrow run: `./alphasma3k asma3kdvl -debug -debugscript ../diagnostic/as3kdvl_bridge_order.cmd -log -seconds_to_run 8` (exited via debugger at the first `d0==0x8f`).
+- Debugger condition syntax was verified against the local MAME debugger documentation before use.
+- Preserved local-only artifacts:
+  - `../diagnostic/as3kdvl_bridge_order.cmd`
+  - `../diagnostic/as3kdvl_bridge_order.log` (144 lines)
+  - `../diagnostic/as3kdvl_bridge_order_console.log` (10 lines)
+- All temporary `AS3KBRIDGE_` source instrumentation was reverted. `src/mame/skeleton/alphasma3k.cpp` is byte-for-byte identical to tracked `HEAD`; no core, ROM definition, hash, or bridge semantics remain changed.
+- `git diff --check`: passed.
+- No file under `roms/`, diagnostic log, generated binary, or proprietary artifact was staged.
+
+## Publication
+
+- Result commit: pending publication commit.
+- Push target: `as3k-project/as3k-mame0289-dev`.
+- Final status before the result commit: ` M docs/as3k/CODEX_RESULT.md`.
