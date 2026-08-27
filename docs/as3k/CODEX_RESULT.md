@@ -1,107 +1,81 @@
-# Codex result — static study of `SystemInstallExceptionVectors`
+# Codex result — dynamic validation of `SystemInstallExceptionVectors`
 
 Date: 2026-08-26
 
-Status: **complete**. Static only: no AS3K run, build, keyboard execution, or MAME source change.
+Status: **complete; all pass criteria met**. No MAME source, core, ROM definition, fixture, generated binary, or proprietary artifact was changed.
 
 ## Repository gate
 
-- Required fast-forward pull: already up to date.
-- Branch: `as3k-mame0289-dev`; tracked state was clean.
-- Composite-LCD commit `38528ee8ffca9ff718d87e88145cae92d9e0134a` is an ancestor of `HEAD`.
+- `git pull --ff-only as3k-project as3k-mame0289-dev`: already up to date.
+- Branch: `as3k-mame0289-dev`.
+- Initial tracked `git status --short`: clean.
+- Static-study commit `4b3f5e065fdf8e694dbe86d1cafb819a67ec4cb0` is an ancestor of `HEAD`.
+- Initial `git diff --check`: passed.
+- Existing `./alphasma3k` executable was present; no rebuild was performed.
 
-## Evidence and relocation
+## Command and local-only script
 
-Original artifacts on `/Users/sperezc/Downloads/AlphaSmart.iso`:
+Created and retained outside the repository:
 
-- `AS3000/Software/ModuleSources/SystemModule.c`
-- `AS3000/Software/ModuleSources/SystemModule.h`
-- `AS3000/Software/BuiltApplet/SystemModule.o.lst`
-- `AS3000/Software/BuiltApplet/AWordApplet02.out`
+- `../diagnostic/as3kdv_exception_vectors.cmd`
+- `../diagnostic/as3kdv_exception_vectors_console.log`
+- `../diagnostic/as3kdv_exception_vectors.log`
 
-Exact linked fixture: `../diagnostic/AWordApplet02.bin` (240264 bytes). File offset zero maps to `0x00420030`, hence `0x00430504` is file offset `0x000104d4`.
+The script was the exact plan from `CODEX_NEXT.md`; no debugger-syntax correction was required. All numeric literals in it use explicit `0x...` notation.
 
-`SystemModule.c` defines `SYSTEM_BUS_ERROR_VECTOR_ADDRESS=0x00000008`, `SYSTEM_ADDRESS_ERROR_VECTOR_ADDRESS=0x0000000c`, `SYSTEM_ILLEGAL_INSTR_VECTOR_ADDRESS=0x00000010`, and `SYSTEM_DIV_BY_ZERO_VECTOR_ADDRESS=0x00000014`. The function uses project types `UInt32_p`/`UInt32` (via `ProjectIncludes.h`).
+Executed only:
 
-The applet listing places the function and handlers at code offsets `0x00000b00`, `0x00000b22`, `0x00000bac`, `0x00000c36`, and `0x00000cc0`. The fixture applies the exact code relocation `+0x0042fa04`, yielding `0x00430504`, `0x00430526`, `0x004305b0`, `0x0043063a`, and `0x004306c4`. The listing's four unresolved handler immediates resolve to those addresses; absolute vector destinations remain unchanged.
-
-## Exact linked routine
-
-`SystemInstallExceptionVectors` is 34 bytes, `0x00430504`–`0x00430525`; `RTS` is at `0x00430524`:
-
-```text
-0x00430504  MOVE.L #0x00430526,0x00000008
-0x0043050c  MOVE.L #0x004305b0,0x0000000c
-0x00430514  MOVE.L #0x0043063a,0x00000010
-0x0043051c  MOVE.L #0x004306c4,0x00000014
-0x00430524  RTS
+```sh
+./alphasma3k asma3kdv \
+  -debug \
+  -debugscript ../diagnostic/as3kdv_exception_vectors.cmd \
+  -log \
+  -seconds_to_run 8
 ```
 
-There are no direct calls/branches or helpers. Only these four RAM longwords are written. The routine accesses no `0xffffxxxx` internal register, `0x0060xxxx` external window, or other RAM; it does not explicitly change SR, A7, interrupt masks, VBR-like state, or any CPU control state. It cannot fail/assert/loop.
+Console termination was `Exited via the debugger`.
 
-The target is big-endian. Each architectural `MOVE.L` appears through MAME's 16-bit MC68EZ328 bus as high-word then low-word debugger transactions.
+## Observations
 
-## Complete vector table change
+Installer entry was reached. The debugger logged `PC=0x00430506`, `A7=0x0003ffd4`, and `SR=0x2014`; the reported PC is +2 from the breakpoint address, matching the documented debugger behavior.
 
-| Vector | RAM address | Handler | Flash address | Size |
-|---:|---:|---|---:|---:|
-| 2, bus error | `0x00000008` | `SystemBusError` | `0x00430526` | long, 32-bit |
-| 3, address error | `0x0000000c` | `SystemAddressError` | `0x004305b0` | long, 32-bit |
-| 4, illegal instruction | `0x00000010` | `SystemIllegalInstruction` | `0x0043063a` | long, 32-bit |
-| 5, divide by zero | `0x00000014` | `SystemDivideByZeroError` | `0x004306c4` | long, 32-bit |
+Exactly these eight watchpoint transactions occurred after entry:
 
-Expected transactions:
+| Vector | Transaction | Address | Data | Reported PC |
+|---|---:|---:|---:|---:|
+| 2 | high | `0x00000008` | `0x0043` | `0x0043050c` |
+| 2 | low | `0x0000000a` | `0x0526` | `0x0043050c` |
+| 3 | high | `0x0000000c` | `0x0043` | `0x00430514` |
+| 3 | low | `0x0000000e` | `0x05b0` | `0x00430514` |
+| 4 | high | `0x00000010` | `0x0043` | `0x0043051c` |
+| 4 | low | `0x00000012` | `0x063a` | `0x0043051c` |
+| 5 | high | `0x00000014` | `0x0043` | `0x00430524` |
+| 5 | low | `0x00000016` | `0x06c4` | `0x00430524` |
 
-| Store PC | High half | Low half |
-|---:|---|---|
-| `0x00430504` | `0x00000008`=`0x0043` | `0x0000000a`=`0x0526` |
-| `0x0043050c` | `0x0000000c`=`0x0043` | `0x0000000e`=`0x05b0` |
-| `0x00430514` | `0x00000010`=`0x0043` | `0x00000012`=`0x063a` |
-| `0x0043051c` | `0x00000014`=`0x0043` | `0x00000016`=`0x06c4` |
+Thus every architectural `MOVE.L` appeared as the expected big-endian high-word transaction followed by its low-word transaction. The reconstructed values are:
 
-No CHK, TRAPV, privilege, trace, line-A/F, spurious, autovector, or TRAP vector is installed. Vector 32/TRAP 0 at `0x00000080` and earlier interrupt vectors at `0x00000110`, `0x00000114`, and `0x00000118` are preserved.
+- `0x00000008 = 0x00430526` (`SystemBusError`)
+- `0x0000000c = 0x004305b0` (`SystemAddressError`)
+- `0x00000010 = 0x0043063a` (`SystemIllegalInstruction`)
+- `0x00000014 = 0x004306c4` (`SystemDivideByZeroError`)
 
-## Handler inspection
+The RTS breakpoint at `0x00430524` was reached. Its memory expressions returned exactly those four final longwords. At RTS the preserved vectors were:
 
-Each handler is 138 bytes and intentionally loops after displaying an LCD diagnostic:
+- TRAP 0, `0x00000080 = 0x00400178`
+- level 4, `0x00000110 = 0x00431a04`
+- level 5, `0x00000114 = 0x00431ab0`
+- level 6, `0x00000118 = 0x00431ae6`
 
-- `SystemBusError`: `0x00430526`–`0x004305af`; self-loop `0x004305a6`.
-- `SystemAddressError`: `0x004305b0`–`0x00430639`; self-loop `0x00430630`.
-- `SystemIllegalInstruction`: `0x0043063a`–`0x004306c3`; self-loop `0x004306ba`.
-- `SystemDivideByZeroError`: `0x004306c4`–`0x0043074d`; self-loop `0x00430744`.
+The level 4/5/6 values exactly match the previously validated values. The same four installed and four preserved vector values were still present at the keyboard-entry stop.
 
-All save D0/D1/A0/A1 and call `LCDClearDisplay` (`0x004308f8`), `LocalGetMessage` (`0x0042f252`), `LCDSetString` (`0x004307f4`), `LCDMoveCursor` (`0x00430c76`), and `LCDSetCString` (`0x0043088a`). Their literals identify bus error, address error, illegal instruction, or divide-by-zero. They write no RAM signature. LCD hardware is referenced only through helpers; those can busy-poll. Each then executes `BRA` to itself forever; following restore/`RTE` code is unreachable. Source calls these unfinished power-cycle diagnostic paths. They are safety vectors and must not execute during normal initialization.
+No breakpoint for `SystemBusError`, `SystemAddressError`, `SystemIllegalInstruction`, or `SystemDivideByZeroError` fired.
 
-## MAME compatibility
-
-`mc68ez328_device` derives through `mc68328_base_device` from `m68000_device`. The core resets `m_vbr` to zero, labels VBR “m68010+”, and fetches exceptions from `(vector << 2) + m_vbr`; this MC68000-generation target therefore uses the table at address zero. The routine never changes VBR.
-
-Only aligned RAM longword writes and `RTS` are required. Earlier vector testing already demonstrated mapped low RAM and high/low 16-bit transactions. No credible emulator limitation specific to this routine was found.
-
-## Exact next dynamic test (not run)
-
-Run only `asma3kdv` with logging. Proposed debugger script:
-
-```text
-temp0 = 0
-bp 0x00430504,1,{ temp0 = 1 ; logerror "EXCEPTION_INSTALL_ENTRY PC=%08X A7=%08X SR=%04X\n",pc,sp,sr ; g }
-wp 0x00000008,0x4,w,temp0==1,{ logerror "VECTOR2 ADDR=%08X DATA=%08X PC=%08X\n",wpaddr,wpdata,pc ; g }
-wp 0x0000000c,0x4,w,temp0==1,{ logerror "VECTOR3 ADDR=%08X DATA=%08X PC=%08X\n",wpaddr,wpdata,pc ; g }
-wp 0x00000010,0x4,w,temp0==1,{ logerror "VECTOR4 ADDR=%08X DATA=%08X PC=%08X\n",wpaddr,wpdata,pc ; g }
-wp 0x00000014,0x4,w,temp0==1,{ logerror "VECTOR5 ADDR=%08X DATA=%08X PC=%08X\n",wpaddr,wpdata,pc ; g }
-bp 0x00430526,1,{ logerror "UNEXPECTED_BUS_ERROR\n" ; quit }
-bp 0x004305b0,1,{ logerror "UNEXPECTED_ADDRESS_ERROR\n" ; quit }
-bp 0x0043063a,1,{ logerror "UNEXPECTED_ILLEGAL_INSTRUCTION\n" ; quit }
-bp 0x004306c4,1,{ logerror "UNEXPECTED_DIVIDE_BY_ZERO\n" ; quit }
-bp 0x00430524,1,{ logerror "INSTALL_RTS V2=%08X V3=%08X V4=%08X V5=%08X\n",d@0x00000008,d@0x0000000c,d@0x00000010,d@0x00000014 ; g }
-bp 0x0042e2a8,1,{ logerror "KEYBOARD_ENTRY_STOP PC=%08X V2=%08X V3=%08X V4=%08X V5=%08X\n",pc,d@0x00000008,d@0x0000000c,d@0x00000010,d@0x00000014 ; quit }
-g
-```
-
-Pass criteria: exactly the eight high/low transactions above; final values `0x00430526`, `0x004305b0`, `0x0043063a`, `0x004306c4`; no handler breakpoint; arrival at `0x0042e2a8` before keyboard executes. No helper breakpoint is needed because the installer calls none.
+`KeyboardInitializeModule` entry was reached before timeout. The breakpoint at `0x0042e2a8` logged `PC=0x0042e2aa`, the documented +2 presentation, and immediately executed `quit`. No breakpoint was placed inside the routine and no keyboard instruction was executed or reverse engineered.
 
 ## Publication
 
-- `git diff --check`: passed.
-- Pre-commit `git status --short`: only `M docs/as3k/CODEX_RESULT.md`; after committing this sole documentation change, expected final status is clean.
-- MAME source changed: no.
+- Final `git diff --check`: passed.
+- Only `docs/as3k/CODEX_RESULT.md` was selected for commit.
+- No diagnostic script/log, MAME source, ROM, fixture, generated binary, or proprietary artifact was staged.
+- Documentation commit: this result commit; its SHA and push outcome are reported in the final task handoff because a commit cannot contain its own SHA.
+- Push target: `as3k-project/as3k-mame0289-dev`.
