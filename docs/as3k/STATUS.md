@@ -12,7 +12,7 @@ The valid-AlphaWord diagnostic path now reaches the entry of:
 
 `KeyboardInitializeModule = 0x0042E2A8`
 
-The debugger stops there before executing any keyboard instruction. Everything listed below has been validated before that point.
+The debugger stops there before executing any keyboard instruction. The keyboard Phase 1 routine has now been correlated statically against the historical AlphaSmart source/listing, but it has not yet been executed.
 
 ## Validated milestones
 
@@ -105,6 +105,38 @@ Previously installed TRAP 0 and level-4/5/6 vectors remained unchanged, no excep
 
 Validation commit: `72b9935edfafe270e91becdd30fb7459c6f07a03` (`as3k: validate exception vector installation`).
 
+### Keyboard Phase 1 — static hardware contract
+
+`KeyboardInitializeModule` has now been correlated exactly against `KeyboardModule.c`, `KeyboardModule.o.lst`, `AWordRAM01.out`, and the Flash-linked `AWordApplet02.bin`.
+
+The routine is a 72-byte leaf at `0x0042E2A8`–`0x0042E2EF`, with RTS at `0x0042E2EE`. It has no direct calls, no RAM-global accesses, no loop or wait, no interrupt installation, and returns `D0 = 0` if its ordinary hardware accesses complete.
+
+Its exact Phase-1 hardware setup is:
+
+- PASEL `0xFFFFF403`: set PA0–PA6 to GPIO, preserve PA7;
+- PADIR `0xFFFFF400`: set PA0–PA6 as outputs, preserve PA7;
+- PAPUEN `0xFFFFF402`: disable internal pull-ups on PA0–PA6, preserve PA7;
+- external latch `0x00600000`: write `0xFF`;
+- PADATA `0xFFFFF401`: drive PA0–PA6 high, preserve PA7;
+- PDSEL `0xFFFFF41B`: write `0xFF`, selecting GPIO on all Port D pins;
+- PDDIR `0xFFFFF418`: write `0x00`, all Port D pins inputs;
+- PDPUEN `0xFFFFF41A`: write `0x00`, internal row pull-ups off.
+
+The keyboard electrical/software contract is now substantially defined:
+
+- 15 scanned columns × 8 rows;
+- the separate logical column code `0x8` is the power switch and is not part of the scanned matrix;
+- external latch bits drive X1–X8; PA0–PA6 drive X9–X15; PD0–PD7 read Y1–Y8;
+- normal scanning selects one column active-low at a time;
+- no-key rows are expected externally pulled high (`PDDATA = 0xFF`); row-low means pressed;
+- `Keyboard_GetNewKeyStates` complements PDDATA so the stored key bitmap is active-high.
+
+Later helper inspection established that `KeyboardEnableKeyboardInterrupt` uses interrupt source `0x40`, drives every column low, and writes `PKBDINT = 0xFF`; the handler disables source `0x40`, clears `PKBDINT`, and sets the keyboard interrupt flag. These later helpers are not called by Phase 1.
+
+`KeyboardInitializeModulePhase2` is separately linked at `0x0042E2F0`–`0x0042E3C3`. It initializes keyboard software globals and installs handler `0x0042EA74` through `InterruptInstallHandler(0x40, ...)`, but does not enable the keyboard interrupt. Phase 2 has not yet been executed.
+
+Static study commit: `eb42b589a18644eeb02e5e1f131e6962f12768c4` (`as3k: correlate keyboard phase 1 statically`).
+
 ## Current machine model
 
 The branch currently models or assumes:
@@ -118,6 +150,8 @@ The branch currently models or assumes:
 - MAME software-list support inherited from the existing skeleton.
 
 Historical AlphaSmart development material supports the production memory map of 256 KiB SRAM, 1 MiB Flash, and an external write-latch window at `0x00600000`. The current MAME driver still uses a static final memory map and a reset-time vector-copy workaround rather than dynamically reproducing all DragonBall chip-select remapping.
+
+For keyboard-related MC68EZ328 state, PADIR/PADATA/PASEL and PDDIR/PDDATA/PDPUEN already have useful core support. PA output and PD input callbacks exist but are not connected by the AS3K driver. Static inspection found no core map entries for PAPUEN `0xFFFFF402`, PDSEL `0xFFFFF41B`, or PKBDINT `0xFFFFF41E`; exact consequences must be demonstrated dynamically before changing a core.
 
 ## Diagnostic systems
 
@@ -148,9 +182,12 @@ The current subtarget contains four drivers: `asma3k`, `asma3kdi`, `asma3kdv`, a
 
 The emulator is not yet a complete usable AlphaSmart 3000. Important remaining work includes:
 
-- keyboard initialization and matrix/latch behavior;
-- actual input-port definitions and key mapping (`INPUT_PORTS` is currently empty);
-- the external write latch at `0x00600000` used by keyboard columns;
+- executing and validating keyboard Phase 1;
+- implementing the external byte-write latch at `0x00600000` once its dynamic necessity is demonstrated;
+- connecting PA0–PA6 outputs and PD0–PD7 row inputs to an actual 15×8 matrix/input-port model;
+- evaluating PAPUEN, PDSEL and PKBDINT core omissions only where execution evidence requires them;
+- validating and then executing `KeyboardInitializeModulePhase2`;
+- actual AlphaSmart key mapping (`INPUT_PORTS` is currently empty);
 - later AlphaWord initialization modules and main-loop execution;
 - dynamic fidelity of DragonBall chip selects/remapping;
 - Port C pull-up register (`PCPUEN`) fidelity in the MC68EZ328 core if later behavior requires it;
@@ -162,9 +199,11 @@ The emulator is not yet a complete usable AlphaSmart 3000. Important remaining w
 
 ## Next development step
 
-Study `KeyboardInitializeModule` at `0x0042E2A8` statically against the historical AlphaSmart source/listing before executing it. The goal is to identify exact GPIO directions/selections, keyboard globals, interrupt installation, external latch accesses, row/column polarity, and any immediate dependency on not-yet-emulated hardware.
+Execute only `KeyboardInitializeModule` Phase 1 on `asma3kdv` under the debugger. Observe the exact byte transactions to Port A, Port D and `0x00600000`, then stop at the caller return `0x00420168` before any later keyboard work.
 
-The same evidence-first method used so far should continue:
+The critical question is whether the currently unmapped write to `0x00600000` merely logs/continues or becomes the first hard execution dependency. No latch, input matrix, driver callback, or MC68EZ328 core change should be made until that narrow test establishes what is actually required.
+
+The evidence-first method remains:
 
 1. historical source/listing;
 2. exact linked AlphaWord bytes and relocations;
