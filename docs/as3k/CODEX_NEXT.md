@@ -1,233 +1,188 @@
-# Current Codex task — study `KeyboardInitializeModule` before execution
+# Current Codex task — execute `KeyboardInitializeModule` Phase 1 only
 
 Date: 2026-08-26
 
 Read `AGENTS.md`, `docs/as3k/STATUS.md`, and the current `docs/as3k/CODEX_RESULT.md` first.
 
-## Established state
+## Established evidence
 
-The normal valid-AlphaWord path is now dynamically validated through the entry of:
+The valid-AlphaWord path is dynamically validated through the entry of:
 
 `KeyboardInitializeModule = 0x0042E2A8`
 
-The immediately preceding primary-module sequence has passed:
+The static keyboard study is complete. Treat these facts as established:
 
-- `InterruptInitializeModule = 0x0043177E`;
-- `TimerInitializeModule = 0x004310BE`;
-- `LCDInitializeModule = 0x0043074E`;
-- `SystemInstallExceptionVectors = 0x00430504`.
+- Phase 1 occupies `0x0042E2A8`–`0x0042E2EF` inclusive;
+- RTS is `0x0042E2EE`;
+- the next byte boundary `0x0042E2F0` is `KeyboardInitializeModulePhase2`, but Phase 2 is called later from a different call site and must **not** be executed in this task;
+- caller JBSR is at `0x00420162`; normal return is `0x00420168`;
+- Phase 1 is a leaf: no direct calls, no RAM globals, no loops/waits, no interrupt install/enable, and it should return `D0=0` if ordinary accesses complete;
+- exact Phase-1 hardware accesses are:
+  - PASEL `0xFFFFF403`: read, OR `0x7F`, write;
+  - PADIR `0xFFFFF400`: read, OR `0x7F`, write;
+  - PAPUEN `0xFFFFF402`: read, AND `0x80`, write;
+  - external latch `0x00600000`: write `0xFF`;
+  - PADATA `0xFFFFF401`: read, OR `0x7F`, write;
+  - PDSEL `0xFFFFF41B`: write `0xFF`;
+  - PDDIR `0xFFFFF418`: write `0x00`;
+  - PDPUEN `0xFFFFF41A`: write `0x00`.
 
-The latest dynamic test installed the expected bus/address/illegal/divide-by-zero vectors, preserved TRAP 0 and level-4/5/6 vectors, and reached `0x0042E2A8` without entering keyboard code.
+Static MAME 0.289 inspection established:
 
-Treat these hardware facts from the project evidence as hypotheses to verify against the keyboard source/listing, not as substitutes for that source:
+- PADIR, PADATA, PASEL, PDDIR, PDDATA and PDPUEN have core support;
+- PA0–PA6 output and PD0–PD7 input callbacks exist but the AS3K driver does not connect them;
+- no AS3K driver mapping/device currently exists for the external byte-write latch `0x00600000`;
+- core map entries appear absent for PAPUEN `0xFFFFF402` and PDSEL `0xFFFFF41B`;
+- `PKBDINT 0xFFFFF41E` is a later concern and is not touched by Phase 1.
 
-- AS3K keyboard matrix is expected to be 15 columns × 8 rows;
-- external write latch window is expected at `0x00600000` and supplies columns X1–X8;
-- Port A lines are expected to supply columns X9–X15;
-- Port D lines are expected to read rows Y1–Y8;
-- `INTERRUPT_KEYBOARD_4` was previously identified from `InterruptModule.o.lst` as mask/value `0x40`.
+This task is a **narrow dynamic validation only**.
 
-The exact initialization behavior, polarity, GPIO register programming, interrupt setup, globals, and linked call graph must now be derived from the historical keyboard source/listing and exact Flash-linked AlphaWord bytes.
-
-This task is **static only**.
-
-**Do not execute `KeyboardInitializeModule`.**
-**Do not modify MAME source.**
-**Do not rebuild.**
-**Do not implement input ports or the external latch yet.**
+**Do not modify MAME source or cores.**
+**Do not implement the latch.**
+**Do not add input ports or keyboard callbacks.**
+**Do not execute Phase 2.**
 
 ---
 
 ## A. Repository gate
 
-From:
-
-`~/Projects/alphasmart-as3k/mame0289`
+From `~/Projects/alphasmart-as3k/mame0289`:
 
 1. `git pull --ff-only as3k-project as3k-mame0289-dev`.
 2. Confirm branch is `as3k-mame0289-dev` and tracked status is clean.
-3. Confirm the branch contains exception-vector validation commit `72b9935edfafe270e91becdd30fb7459c6f07a03` or a clean descendant.
-4. Confirm public handoff `docs/as3k/STATUS.md` exists.
+3. Confirm static keyboard commit `eb42b589a18644eeb02e5e1f131e6962f12768c4` is an ancestor of HEAD.
+4. Confirm `docs/as3k/STATUS.md` contains the keyboard Phase-1 contract.
 5. Run `git diff --check`.
+6. Confirm existing `./alphasma3k` executable is present. Do not rebuild; if it is missing, stop and report.
 
 Do not edit `src/mame/skeleton/alphasma3k.cpp`, `src/mame/mame.lst`, any MAME core, ROM definition, fixture, or generated file.
 
 ---
 
-## B. Locate the original keyboard source and listings
+## B. Create one local debugger script
 
-Search the local archived AS3000 development material, especially `/Users/sperezc/Downloads/AlphaSmart.iso`, for the artifacts corresponding to keyboard initialization.
+Create local-only:
 
-Prioritize original files such as:
+`../diagnostic/as3kdv_keyboard_phase1.cmd`
 
-- `Software/ModuleSources/KeyboardModule.c` and related headers;
-- `KeyboardModule.o.lst` or equivalent object listing;
-- `AWordRAM01.out`, map/symbol output, or linked listings used in prior stages;
-- any hardware-definition headers referenced by the keyboard module, including DragonBall GPIO/register constants and write-latch definitions.
+Use explicit `0x...` literals everywhere.
 
-Report exact file paths used.
+The script must:
 
-Identify and distinguish at minimum:
+1. mark entry at `0x0042E2A8`;
+2. watch the exact Phase-1 hardware locations as byte accesses;
+3. record address, data, read/write direction where supported, and PC;
+4. break at the Phase-1 RTS `0x0042E2EE` and record D0 plus relevant GPIO register values using proven debugger memory expressions;
+5. continue through RTS and quit at caller return `0x00420168`;
+6. include safety breakpoints for locations that Phase 1 must not call/enter:
+   - `InterruptInstallHandler = 0x004318A4`;
+   - `Keyboard_InterruptHandler = 0x0042EA74`;
+   - `KeyboardInitializeModulePhase2 = 0x0042E2F0` should not be reached by fall-through; if reached before caller return, treat as failure and quit.
 
-- `KeyboardInitializeModule`;
-- `KeyboardInitializeModulePhase2` if present;
-- keyboard interrupt handler(s);
-- low-level matrix scan/read helper(s) directly relevant to initialization;
-- any debounce/repeat/timer helper directly invoked during initialization.
+Watch these exact byte addresses:
 
-Do not recursively reverse engineer the entire keyboard subsystem.
+- `0xFFFFF403` PASEL — read/write;
+- `0xFFFFF400` PADIR — read/write;
+- `0xFFFFF402` PAPUEN — read/write;
+- `0x00600000` external latch — write;
+- `0xFFFFF401` PADATA — read/write;
+- `0xFFFFF41B` PDSEL — write;
+- `0xFFFFF418` PDDIR — write;
+- `0xFFFFF41A` PDPUEN — write.
 
----
+If a watchpoint cannot be set because an address is unmapped, document that fact and use the narrowest safe alternative needed to observe the transaction (for example debugger/log output). Do not broaden into code changes.
 
-## C. Correlate the exact Flash-linked `KeyboardInitializeModule`
+Because MAME debugger breakpoint PC is already known to report +2 in this workflow, do not treat the presentation offset alone as failure.
 
-Using `AWordApplet02.bin` and the historical listing/symbol material, determine precisely:
-
-1. entry address, expected `0x0042E2A8`;
-2. exact end/return address and byte length;
-3. every direct call made by the routine;
-4. every global RAM variable written/read during initialization;
-5. every MC68EZ328 internal register accessed;
-6. every external hardware address accessed, especially the `0x0060xxxx` write-latch window if present;
-7. every interrupt API call and exact interrupt constant/mask;
-8. whether the routine changes SR/interrupt mask directly;
-9. whether it contains loops, waits, asserts, or error paths that could hang on missing hardware;
-10. whether linked Flash bytes match the historical source/listing after accounting for relocations.
-
-Provide exact addresses and access widths (byte/word/long), not just symbolic names.
+The exact script syntax may be adapted only as required by the already-established MAME 0.289 debugger syntax; document any correction.
 
 ---
 
-## D. Reconstruct the keyboard electrical/software model needed by initialization
+## C. Execute only `asma3kdv`
 
-From source/listing evidence, determine exactly how the firmware expects the AS3K keyboard interface to behave.
+Run only:
 
-Document:
+```sh
+./alphasma3k asma3kdv \
+  -debug \
+  -debugscript ../diagnostic/as3kdv_keyboard_phase1.cmd \
+  -log \
+  -seconds_to_run 8
+```
 
-- number of matrix columns and rows actually referenced by this build;
-- which columns are driven by the external latch and which by Port A;
-- exact Port A bits used;
-- exact Port D bits used for rows;
-- direction/select/pull-up register values written for Port A and Port D;
-- active polarity of column drive;
-- active polarity of row/key detection;
-- idle values expected with no key pressed;
-- whether multiple columns can be active simultaneously;
-- whether scanning uses one-hot, active-low, active-high, or another pattern;
-- exact external latch write address(es) and values used by initialization, if any;
-- whether the latch is write-only from firmware's perspective;
-- whether keyboard input relies on Port D data, edge/interrupt status, both, or something else;
-- which DragonBall interrupt source is used and how it is enabled/cleared/configured.
+Capture console output and preserve local-only logs under `../diagnostic/`, for example:
 
-If some of these behaviors belong only to scan helpers and are not exercised during `KeyboardInitializeModule`, inspect only enough helper code to establish the hardware contract for the next emulator stage and state that boundary clearly.
+- `as3kdv_keyboard_phase1_console.log`
+- `as3kdv_keyboard_phase1.log`
+
+Do not stage diagnostic files.
+
+`asma3kdv` intentionally has no KS0066 devices. That is acceptable because LCD initialization and the exception-vector path have already been validated independently and this task begins only at keyboard Phase 1.
 
 ---
 
-## E. Distinguish Phase 1 from `KeyboardInitializeModulePhase2`
+## D. Exact observations and pass/stop criteria
 
-AlphaWord calls `KeyboardInitializeModulePhase2` later in `_AWord_Initialize`, after `SystemCheckBootSignature`.
+Record the factual transaction sequence. Compare against the static expectation but do not force expected values where the current core reset state controls preserved bit 7.
 
-Determine, from source/listing only:
+Expected semantic sequence:
 
-- exact linked address of Phase 2;
-- what hardware/software work is deferred to Phase 2;
-- whether Phase 1 can complete independently of Phase 2;
-- whether Phase 1 installs the interrupt handler or Phase 2 does;
-- whether Phase 1 expects any key state or hardware event before returning.
+1. PASEL read then write `old | 0x7F`;
+2. PADIR read then write `old | 0x7F`;
+3. PAPUEN read then write `old & 0x80`;
+4. latch write `0xFF` at exactly `0x00600000`;
+5. PADATA read then write `old | 0x7F`;
+6. PDSEL write `0xFF`;
+7. PDDIR write `0x00`;
+8. PDPUEN write `0x00`;
+9. Phase-1 RTS reached with `D0=0`;
+10. caller return `0x00420168` reached before timeout.
 
-Do not execute or fully reverse engineer Phase 2 in this task.
+Important decision point: the latch is intentionally unmapped. Determine whether the write to `0x00600000`:
 
----
+- is observed/logged but execution continues; or
+- causes an exception, stop, or other hard dependency.
 
-## F. Check current MAME support against the exact Phase-1 requirements
+If the latch write causes a hard stop/exception, **stop the test there and report it as the first demonstrated missing driver dependency. Do not fix it.**
 
-Inspect MAME 0.289 source only as needed. Do not edit it.
+Likewise, if PAPUEN/PDSEL missing core mappings cause a hard execution failure, stop and report the exact first failure. If they merely log as unmapped and execution continues, record this but continue only through caller return.
 
-Compare the static keyboard requirements with the current driver/core:
+Pass for this stage means either:
 
-- `src/mame/skeleton/alphasma3k.cpp` currently has empty `INPUT_PORTS`;
-- the production write-latch behavior is not yet implemented in the driver;
-- the MC68EZ328 core exposes Port A and Port D GPIO callbacks/register handlers.
+- full Phase 1 reaches caller return with the exact finite sequence and `D0=0`; or
+- the test cleanly identifies the first hard missing hardware dependency at one of the expected accesses, with no speculative fix.
 
-For each hardware operation actually required by `KeyboardInitializeModule`, classify it as:
+Failure means unexplained control flow, an unexpected exception/handler, unexpected Phase-2 entry, or execution outside the bounded routine without a clear hardware cause.
 
-1. already modeled correctly;
-2. modeled by the MC68EZ328 core but not connected in the AS3K driver;
-3. absent from the AS3K driver and requiring a local device/latch/input implementation;
-4. potentially absent/incorrect in the MC68EZ328 core itself.
-
-Do not infer a core bug merely because the AS3K driver has not connected a callback.
-
-If the keyboard initializer touches a register the core does not implement, identify the exact register and source evidence.
+Do not scan keys, do not execute any normal keyboard polling helper, and do not run Phase 2.
 
 ---
 
-## G. Design the next narrow dynamic test, but do not run it
-
-Based on the static result, specify an exact debugger plan for the following task.
-
-The next test should execute **only `KeyboardInitializeModule` Phase 1**, observe its hardware/global writes, and stop immediately after it returns, before the next higher-level initialization work proceeds.
-
-Design breakpoints/watchpoints for:
-
-- entry `0x0042E2A8`;
-- exact Port A/Port D registers written/read by Phase 1;
-- exact external latch range if Phase 1 touches it;
-- exact keyboard globals initialized;
-- `InterruptInstallHandler` call/result if used;
-- keyboard interrupt handler breakpoint as a fail/safety condition if it should not fire during initialization;
-- assert/error helper if one exists;
-- exact return/next-call boundary determined from the linked caller.
-
-Use explicit `0x...` numeric literals throughout.
-
-State the exact expected values for every watched register/global where source/listing evidence makes them deterministic.
-
-If Phase 1 is predicted to hit missing latch/input hardware before returning, design the test to stop on that first demonstrated dependency rather than adding an emulator fix preemptively.
-
----
-
-## H. Public-documentation implications
-
-Do not edit `STATUS.md` in this task, but include in `CODEX_RESULT.md` a concise section titled `Public handoff implications` containing:
-
-- the new execution/hardware facts another developer would need;
-- the exact first missing emulator component, if one is identified;
-- what remains unproven;
-- the recommended next dynamic test.
-
-This lets the coordinating step update the public status document without relying on chat history.
-
----
-
-## I. Publication
-
-This is a no-source-change task.
+## E. Publication and public handoff
 
 At the end:
 
 1. `git diff --check`.
 2. `git status --short`.
-3. Confirm no MAME source, ROM, fixture, proprietary artifact, diagnostic binary, or generated file changed.
-4. Replace `docs/as3k/CODEX_RESULT.md` with a factual report containing at least:
-   - exact source/listing artifacts used;
-   - linked address range and return;
-   - direct calls and relevant helper symbols/addresses;
-   - all RAM globals initialized;
-   - all Port A/Port D/internal-register accesses;
-   - external-latch accesses;
-   - matrix geometry and polarities supported by evidence;
-   - interrupt setup and handler address;
-   - Phase-1 versus Phase-2 responsibilities;
-   - current MAME support/gaps classified as above;
-   - exact next debugger test plan;
-   - `Public handoff implications` section;
-   - `git diff --check` and final status.
+3. Confirm no MAME source/core, ROM, fixture, generated binary, diagnostic script/log, or proprietary artifact is staged.
+4. Replace `docs/as3k/CODEX_RESULT.md` with a factual report containing:
+   - exact command/script used;
+   - every observed Phase-1 hardware transaction in order;
+   - actual old/new values for read-modify-write registers;
+   - exact behavior of writes to unmapped PAPUEN/PDSEL/latch addresses;
+   - whether any CPU exception or error handler fired;
+   - D0 and key register state at RTS if reached;
+   - whether caller return `0x00420168` was reached;
+   - confirmation Phase 2 was not executed;
+   - `git diff --check` and final tracked status;
+   - documentation commit and push result.
 5. Commit only the safe documentation result.
 6. Push only to `as3k-project/as3k-mame0289-dev`.
 
+Do not update `STATUS.md` yourself in this run unless the task handoff explicitly changes; ChatGPT will consolidate the public handoff after reading the result.
+
 ## Stop condition
 
-Stop after `KeyboardInitializeModule` Phase 1 is fully correlated statically and the next dynamic test is designed.
+Stop immediately after the caller return at `0x00420168`, or earlier at the first demonstrated hard Phase-1 hardware dependency.
 
-**Do not execute keyboard code. Do not implement keyboard/latch/input ports. Do not modify MAME source or cores.**
+**Do not implement or fix keyboard hardware in this task.**
