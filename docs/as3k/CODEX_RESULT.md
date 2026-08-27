@@ -73,6 +73,7 @@ The command reconstruction is exact:
 
 ## Publication
 
-- Result commit: pending publication commit.
+- Result commit: `3ed400e1` (`as3k: prove LCD bridge atomicity failure`).
 - Push target: `as3k-project/as3k-mame0289-dev`.
-- Final status before the result commit: ` M docs/as3k/CODEX_RESULT.md`.
+- Push result: succeeded (`468cb8c2..3ed400e1`).
+- Final status after recording publication is expected to be clean.
