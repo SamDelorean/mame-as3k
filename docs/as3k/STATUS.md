@@ -8,11 +8,11 @@ The branch is based on exact MAME 0.289 commit `f34f02505e32c1993c6a782b6814232c
 
 ## Current execution frontier
 
-The valid-AlphaWord diagnostic path has now executed through **`KeyboardInitializeModule` Phase 1** and returned normally to its caller at `0x00420168` with `D0 = 0`.
+The valid-AlphaWord diagnostic path has executed through **`KeyboardInitializeModule` Phase 1** and returned normally to its caller at `0x00420168` with `D0 = 0`.
 
 `KeyboardInitializeModulePhase2 = 0x0042E2F0` has **not** been executed.
 
-The next task is a static audit of MC68EZ328 Port-A/Port-D register coverage before any keyboard/core implementation is attempted.
+The MC68EZ328 keyboard-related GPIO audit is now complete. The next implementation stage is deliberately narrow: add only the AS3K board's external 8-bit keyboard column latch at `0x00600000`, preserve it as driver state, validate the already-observed Phase-1 write, and stop before adding the matrix, key mappings, Phase 2, or CPU-core changes.
 
 ## Validated milestones
 
@@ -29,114 +29,77 @@ The historical MAME TODO describing a failure at `0x0040016C` as `cmpa.w A0,A1` 
 
 `InterruptInitializeModule = 0x0043177E` has been correlated with historical AlphaSmart source/listings and executed successfully.
 
-Validated state includes:
-
-- ICR `0xFFFFF302 = 0x0000`
-- IMR `0xFFFFF304 = 0x00FFFFFF`
-- ISR `0xFFFFF30C = 0x00000000`
-- IPR `0xFFFFF310 = 0x00000000`
-- level-4 vector `0x00000110 = 0x00431A04`
-- level-5 vector `0x00000114 = 0x00431AB0`
-- level-6 vector `0x00000118 = 0x00431AE6`
+Validated state includes ICR `0xFFFFF302 = 0x0000`, IMR `0xFFFFF304 = 0x00FFFFFF`, ISR `0xFFFFF30C = 0`, IPR `0xFFFFF310 = 0`, and the level-4/5/6 vectors at `0x00000110/114/118`.
 
 ### Timer initialization
 
-`TimerInitializeModule = 0x004310BE` has been executed successfully.
-
-Validated behavior includes:
-
-- timer globals and all three `TimerInfo` entries initialized;
-- `Timer_InterruptHandler = 0x004313D8` installed for `INTERRUPT_TIMER_6 = 0x2`;
-- RTCCTL `0xFFFFFB0C = 0x0080`;
-- RTCDAY `0xFFFFFB1A = 0x0000`;
-- RTCHMSR `0xFFFFFB00 = 0x00000000`.
+`TimerInitializeModule = 0x004310BE` has been executed successfully. The three timer records and globals initialize correctly, `Timer_InterruptHandler = 0x004313D8` is installed for `INTERRUPT_TIMER_6 = 0x2`, and RTCCTL/RTCDAY/RTCHMSR receive the expected values.
 
 ### LCD GPIO protocol and controller bridge
 
-The AlphaSmart LCD uses MC68EZ328 Port C:
+The AlphaSmart LCD uses MC68EZ328 Port C: PC0–PC3 DB4–DB7, PC4 R/W, PC5 RS, PC6 E1, PC7 E2.
 
-- PC0–PC3: DB4–DB7
-- PC4: R/W
-- PC5: RS
-- PC6: E1 / top controller
-- PC7: E2 / bottom controller
+The driver bridges these signals to two `ks0066_device` instances. An initial per-bit bridge exposed an ordering error in which an atomic PCDATA write could lower R/W before E, producing a false `0x8F` LCD command and infinite busy loop. The bridge was corrected locally in `alphasma3k_state` without changing the MC68EZ328 or HD44780/KS0066 cores.
 
-The driver bridges these signals to two `ks0066_device` instances.
-
-An initial per-bit callback implementation exposed an ordering problem: one atomic PCDATA write was presented to the KS0066 as separate bit changes, allowing R/W to fall before E. The resulting false write produced command `0x8F` and an infinite busy loop.
-
-The bridge was corrected locally in `alphasma3k_state` without modifying the MC68EZ328 or HD44780/KS0066 cores. It accumulates the Port-C byte and commits it atomically: falling E edges see the old DB/RW/RS state, then DB/RW/RS are updated, then rising E edges see the new state.
-
-With the corrected bridge, AlphaWord observes a real finite busy flag (`0x80` observed and cleared on the next poll), with no false `0x8F` and no E1/E2 contention.
-
-Key implementation commit: `0b414444` (`as3k: make LCD Port C bridge atomic`).
+With the corrected bridge, a real finite busy flag is observed and clears normally. Key implementation commit: `0b414444`.
 
 ### 40×4 display composition
 
-The display is modeled as two independent 2×40 character controllers:
-
-- rows 1–2: E1 / `ks0066_0`, DDRAM lines `0x00` and `0x40`;
-- rows 3–4: E2 / `ks0066_1`, DDRAM lines `0x00` and `0x40`.
-
-The driver composes one 240×36 LCD screen using 6×9 cells with 5×8 active glyph pixels. Both KS0066 devices are configured as 2×40.
-
-Palette and refresh/vblank values remain provisional rather than measured from original AS3K hardware.
-
-Key implementation commit: `38528ee8ffca9ff718d87e88145cae92d9e0134a`.
+The display is modeled as two independent 2×40 controllers: rows 1–2 from E1/`ks0066_0`, rows 3–4 from E2/`ks0066_1`. The driver composes one 240×36 LCD screen using 6×9 cells with 5×8 active glyph pixels. Key implementation commit: `38528ee8ffca9ff718d87e88145cae92d9e0134a`.
 
 ### Exception vectors
 
-`SystemInstallExceptionVectors = 0x00430504` has been correlated and executed successfully.
+`SystemInstallExceptionVectors = 0x00430504` has been executed successfully. Bus error, address error, illegal instruction and divide-by-zero vectors are written as the expected eight big-endian 16-bit transactions; previously installed vectors remain intact and no exception handler fires.
 
-It installs:
+### Keyboard hardware contract and Phase 1
 
-| Vector | RAM entry | Handler |
-| --- | --- | --- |
-| 2 — bus error | `0x00000008` | `0x00430526` |
-| 3 — address error | `0x0000000C` | `0x004305B0` |
-| 4 — illegal instruction | `0x00000010` | `0x0043063A` |
-| 5 — divide by zero | `0x00000014` | `0x004306C4` |
+Historical AlphaSmart source/listings establish a **15-column × 8-row** keyboard matrix:
 
-The four longword stores appeared as the expected eight big-endian 16-bit transactions. TRAP 0 and level-4/5/6 vectors remained intact and no exception handler executed.
+- X1–X8: external 8-bit latch at `0x00600000`;
+- X9–X15: PA0–PA6;
+- Y1–Y8: PD0–PD7;
+- scan is active-low;
+- idle rows are externally pulled high;
+- row low means pressed;
+- logical column `0x8` is the separate power switch, not part of the scanned 15×8 matrix.
 
-Validation commit: `72b9935edfafe270e91becdd30fb7459c6f07a03`.
+`KeyboardInitializeModule` Phase 1 is a 72-byte leaf at `0x0042E2A8–0x0042E2EF`, RTS `0x0042E2EE`. It has no calls, globals, loops, waits or interrupt installation. The dynamic test observed the exact 12 expected transactions and returned to `0x00420168` with `D0 = 0`. Phase 2, the keyboard interrupt handler and CPU exception handlers were not entered.
 
-### Keyboard hardware contract
+The external latch write `0x00600000 = 0xFF` is currently unmapped but nonfatal. PAPUEN and the AlphaSmart write to `0xFFFFF403` are also nonfatal in the current core.
 
-Historical `KeyboardModule.c`, object listings, symbols and `AWordApplet02.bin` establish the AS3K keyboard as **15 scanned columns × 8 rows**.
+## MC68EZ328 keyboard GPIO audit
 
-- X1–X8 are driven by an external 8-bit latch at `0x00600000`.
-- X9–X15 are driven by PA0–PA6.
-- Y1–Y8 are read on PD0–PD7.
-- logical column code `0x8` is the separate power switch and is not part of the normal scan.
-- normal scan is active-low, one column at a time.
-- idle rows are expected externally pulled high; row low means pressed.
-- `Keyboard_GetNewKeyStates` complements PDDATA so the internal key bitmap is active-high.
+Static audit commit: `08816104002f27365ace1798eddd06b78550c764` (`as3k: audit EZ328 keyboard GPIO gaps`).
 
-`KeyboardInitializeModule` Phase 1 is a 72-byte leaf at `0x0042E2A8–0x0042E2EF`, RTS `0x0042E2EE`. It has no direct calls, globals, loops, waits or interrupt setup.
+The audit compared MAME 0.289 `mc68328.cpp/.h`, AlphaSmart `M68328EZ.h`/`KeyboardModule.c`/listing material, and the Motorola/Freescale MC68EZ328 manual.
 
-Its exact hardware sequence is:
+Important corrections and boundaries:
 
-- PASEL `0xFFFFF403`: read `0x00`, write `0x7F`;
-- PADIR `0xFFFFF400`: read `0x00`, write `0x7F`;
-- PAPUEN `0xFFFFF402`: read `0x00`, write `0x00`;
-- external latch `0x00600000`: write `0xFF`;
-- PADATA `0xFFFFF401`: read `0x00`, write `0x7F`;
-- PDSEL `0xFFFFF41B`: write `0xFF`;
-- PDDIR `0xFFFFF418`: write `0x00`;
-- PDPUEN `0xFFFFF41A`: write `0x00`.
+- **PADIR/PADATA** are mapped for EZ through `base_internal_map()` and are reusable for AS3K column outputs once the proper internal Port-A select state and callbacks are in place.
+- **PAPUEN `0xFFFFF402`** is genuinely missing from the MAME EZ core. Correct support requires new state, reset/save handling, handlers, and Port-A input pull-up fallback.
+- **`0xFFFFF403` is not an EZ PASEL register.** The EZ manual marks it reserved. MAME's original-MC68328 `pasel_r/w` must not simply be mapped into EZ. EZ Port-A GPIO selection is controlled by `SCR.WDTH8`; the core already uses that bit to set its internal `m_pasel`. AlphaSmart's write to `0x403` is therefore best treated as a harmless reserved-register write rather than evidence for an EZ PASEL register.
+- The EZ save-state path does not currently save the internal Port-A selection state changed by `SCR.WDTH8`; this is a separate fidelity defect to address with the Port-A core work.
+- **PDDIR/PDDATA/PDPUEN** are mapped and provide a reusable row-input path.
+- **PDSEL `0xFFFFF41B`** is genuinely missing. Correct fidelity requires new state/handlers plus PD7–PD4 mux gating; PD3–PD0 are always GPIO on the EZ. Current MAME effectively treats all eight Port-D bits as GPIO.
+- **PKBDINT in AlphaSmart sources corresponds to EZ PDKBEN `0xFFFFF41E`**, not a pending/acknowledge register. It is an 8-bit enable mask feeding an active-low level-sensitive OR keyboard interrupt. Correct support requires new core state and interrupt semantics, but it is not needed for Phase 1 or Phase 2 and can be deferred until `KeyboardEnableKeyboardInterrupt` is reached.
+- Existing PDPOL/PDIRQEN/PDIRQEDGE state is incomplete/over-broad for exact EZ semantics. In particular, current individual interrupt logic does not fully gate on PDIRQEN. This should be handled together with the later PDKBEN interrupt stage rather than mixed into the initial keyboard-latch work.
+- The external `0x00600000` component is board logic, not DragonBall state. It belongs entirely in `alphasma3k_state` as a saved 8-bit write latch whose outputs eventually become keyboard columns X1–X8.
 
-The dynamic Phase-1 test completed and reached caller return `0x00420168` with `D0 = 0`. No Phase-2 entry, exception handler, `InterruptInstallHandler` or keyboard interrupt handler fired.
+A previous debugger readback of zero after writes to mapped GPIO registers remains partially unresolved. Static handler inspection shows PADIR should retain `0x7F`, so a later narrow debugger-space/readback test may be useful. This does not block the driver-only latch stage.
 
-The external latch write is currently unmapped but nonfatal. PAPUEN accesses are also unmapped. PASEL transactions were observed at the correct byte address but produced aligned unmapped diagnostics around `0xFFFFF402`. PDSEL accepted a bus transaction but retained readback was not demonstrated. Direct debugger readback at the Phase-1 RTS returned zero for the tested GPIO register bytes even where watchpoints had observed writes.
+## Minimum patch sequence
 
-This makes the next core audit necessary before implementing the keyboard.
+Development should remain staged:
 
-Static MAME source inspection already shows one important correction to the earlier support classification: `base_internal_map()` maps PADIR/PADATA and Port-D registers, while PASEL is explicitly added by `mc68328_device::internal_map()` and is not obviously added by `mc68ez328_device::internal_map()`. PASEL support for the EZ core must therefore be considered **unconfirmed** until the audit is complete.
+1. **Driver-only external latch at `0x00600000`** — implement and validate by itself.
+2. **EZ Port-A core fidelity** — PAPUEN plus correct/saveable `SCR.WDTH8` selection behavior; do not add a fake PASEL register.
+3. **Driver matrix plumbing** — connect PA0–PA6 outputs and latch X1–X8 to PD0–PD7 row evaluators, with externally idle-high rows and support for multiple active-low columns.
+4. **EZ PDSEL fidelity** — add correct upper-nibble mux state/behavior.
+5. **Keyboard interrupt stage** — implement PDKBEN/PKBDINT active-low OR and audit/fix related Port-D interrupt semantics immediately before the firmware actually enables keyboard interrupts.
 
-`KeyboardInitializeModulePhase2 = 0x0042E2F0–0x0042E3C3` initializes software state and installs `Keyboard_InterruptHandler = 0x0042EA74` through `InterruptInstallHandler(0x40, ...)`; it does not enable the keyboard interrupt. Phase 2 has not yet been executed.
+This sequence intentionally avoids combining latch, matrix, key definitions, core register fixes and interrupt logic into one change.
 
-Static-study commit: `eb42b589a18644eeb02e5e1f131e6962f12768c4`.
+`KeyboardInitializeModulePhase2 = 0x0042E2F0–0x0042E3C3` initializes software state and installs `Keyboard_InterruptHandler = 0x0042EA74` through `InterruptInstallHandler(0x40, ...)`; it does not enable the keyboard interrupt. Phase 2 remains unexecuted.
 
 ## Current machine model
 
@@ -149,22 +112,11 @@ The branch currently models or assumes:
 - two KS0066-compatible LCD controllers through Port C;
 - one composite 40×4 LCD screen.
 
-Historical AlphaSmart material supports the production map of 256 KiB SRAM, 1 MiB Flash and an external write-latch window at `0x00600000`.
-
-Dynamic DragonBall chip-select remapping is not yet reproduced by the current MAME core/driver.
+Historical AlphaSmart material supports the production map of 256 KiB SRAM, 1 MiB Flash and an external write-latch window at `0x00600000`. Dynamic DragonBall chip-select remapping is not yet reproduced.
 
 ## Diagnostic systems
 
-The branch contains ROM definitions for:
-
-- `asma3k` — original MAME AlphaSmart 3000 set;
-- `asma3kdi` — invalid-applet startup diagnostic;
-- `asma3kdv` — valid-AlphaWord diagnostic without LCD devices;
-- `asma3kdvl` — valid-AlphaWord diagnostic with LCD bridge and both controllers.
-
-Diagnostic ROM/fixture files are **not distributed in this repository**. No AlphaSmart firmware, physical ROM dump, proprietary AlphaWord binary, real KS0066 CGROM or generated diagnostic ROM is committed.
-
-Controller-protocol testing used a local 4096-byte all-zero synthetic `ks0066_f05.bin`; MAME intentionally reports a checksum warning for it. It is not a fidelity substitute for the real character ROM.
+The branch contains `asma3k`, `asma3kdi`, `asma3kdv`, and `asma3kdvl`. Diagnostic ROM/fixture files are **not distributed in this repository**. No AlphaSmart firmware, physical ROM dump, proprietary AlphaWord binary, real KS0066 CGROM or generated diagnostic ROM is committed.
 
 ## Reduced build
 
@@ -174,57 +126,25 @@ make SUBTARGET=alphasma3k SOURCES=src/mame/skeleton/alphasma3k.cpp OSD=sdl REGEN
 
 Executable: `./alphasma3k`
 
-Current subtarget drivers: `asma3k`, `asma3kdi`, `asma3kdv`, `asma3kdvl`.
-
 ## Known gaps
 
-The emulator is not yet a complete usable AlphaSmart 3000. Remaining work includes:
-
-- complete MC68EZ328 Port-A/Port-D register audit for PASEL/PAPUEN/PDSEL/PKBDINT;
-- external 8-bit keyboard latch at `0x00600000`;
-- PA0–PA6 output-column callbacks and PD0–PD7 row-input model;
-- actual 15×8 keyboard matrix/input-port definitions and AlphaSmart key mapping;
-- dynamic validation of Keyboard Phase 2 and keyboard interrupt behavior;
-- later AlphaWord initialization modules and main loop;
-- dynamic chip-select/remapping fidelity;
-- other DragonBall register omissions where execution proves they matter;
-- power/battery behavior;
-- UART/RS-232, ADB, PS/2, IrDA and USB/PDIUSBD11D;
-- Flash update/write behavior;
-- measured LCD timing/colors and exact original controller confirmation;
-- explicit synthetic four-row visual-rendering fixture.
+The emulator is not yet a complete usable AlphaSmart 3000. Remaining work includes the external keyboard latch, EZ PAPUEN/Port-A fidelity, PA/latch-to-PD matrix plumbing, PDSEL, later PDKBEN keyboard interrupt behavior, actual MAME input-port/key mapping, Phase 2 and later AlphaWord modules, dynamic chip-select/remapping fidelity, power/battery behavior, UART/RS-232, ADB, PS/2, IrDA, USB/PDIUSBD11D, Flash update/write behavior, measured LCD timing/colors, exact controller confirmation, and an explicit synthetic four-row visual fixture.
 
 ## Next development step
 
-Perform a **static MC68EZ328 keyboard GPIO audit** against `mc68328.cpp/.h`, historical `M68328EZ.h`, and the available MC68EZ328 documentation.
+Implement **only** the AS3K external keyboard latch in the driver:
 
-The audit must classify each keyboard-related register as:
+- saved 8-bit latch state in `alphasma3k_state`;
+- write mapping for the board decode at `0x00600000` (respecting the known 32 KiB chip-select window while modeling the real byte-wide latch semantics correctly);
+- deterministic emulator reset state documented as an emulator choice if the physical power-on value remains unknown;
+- no matrix callbacks, no input ports, no Phase 2, and no MC68EZ328 core modification yet;
+- rebuild the reduced subtarget and repeat only enough of the existing Phase-1 diagnostic to prove the `0xFF` write is now mapped/retained and normal return still occurs;
+- preserve `asma3kdi`/`asma3kdv` startup behavior and existing LCD regressions as appropriate.
 
-- already correct for MC68EZ328;
-- existing handler/state missing only from the EZ map;
-- genuinely missing state/semantics;
-- driver-only functionality;
-- safe to defer until interrupt use.
-
-In particular it must resolve PASEL, PAPUEN, PDSEL and PKBDINT, explain the observed dynamic readbacks/unmapped messages, and define the smallest correct patch sequence. No source modification should occur until that audit is complete.
-
-The evidence-first development method remains:
-
-1. original AlphaSmart source/listings;
-2. exact linked binary behavior;
-3. narrow dynamic test;
-4. static MAME core audit where needed;
-5. minimum demonstrated implementation;
-6. regression test and public documentation.
+The evidence-first development method remains: original source/listings → exact linked behavior → narrow dynamic test → static core audit where needed → minimum demonstrated implementation → regression test → public documentation.
 
 ## Reproducibility and contribution notes
 
-Development coordination files live in `docs/as3k/`:
-
-- `STATUS.md` — this public handoff;
-- `CODEX_NEXT.md` — next narrowly scoped Codex task;
-- `CODEX_RESULT.md` — factual result of the most recently completed task.
-
-`AGENTS.md` contains repository-specific scope and safety rules.
+Development coordination files live in `docs/as3k/`: `STATUS.md`, `CODEX_NEXT.md`, and `CODEX_RESULT.md`. `AGENTS.md` contains repository-specific scope and safety rules.
 
 Keep proprietary ROMs, firmware, historical binaries and generated diagnostic ROMs out of Git. Public source changes, documentation, reproducible scripts and factual test results are appropriate for this branch.
