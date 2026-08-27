@@ -73,7 +73,6 @@ protected:
 	required_device<ram_device> m_ram;
 	required_region_ptr<u16> m_ipl;
 
-	std::unique_ptr<bitmap_ind16> m_tmp_bitmap;
 	u8 m_lcd_port_c_pending = 0;
 	u8 m_lcd_port_c_applied = 0;
 
@@ -81,6 +80,8 @@ protected:
 	virtual void machine_reset() override ATTR_COLD;
 
 private:
+	void alphasmart3k_palette(palette_device &palette) const;
+	u32 screen_update(screen_device &screen, bitmap_ind16 &bitmap, const rectangle &cliprect);
 	void main_map(address_map &map) ATTR_COLD;
 	void lcd_port_c_w(unsigned bit, int state);
 	void lcd_port_c_commit();
@@ -177,6 +178,51 @@ u8 alphasmart3k_state::lcd_data_r()
 	return 0x0f;
 }
 
+void alphasmart3k_state::alphasmart3k_palette(palette_device &palette) const
+{
+	// Provisionally reuse the AlphaSmart palette; these are not measured AS3K colors.
+	palette.set_pen_color(0, rgb_t(138, 146, 148));
+	palette.set_pen_color(1, rgb_t(92, 83, 88));
+}
+
+u32 alphasmart3k_state::screen_update(screen_device &screen, bitmap_ind16 &bitmap, const rectangle &cliprect)
+{
+	bitmap.fill(0, cliprect);
+
+	auto const draw_line = [&bitmap, &cliprect](ks0066_device &lcdc, int physical_row, int controller_line)
+	{
+		u8 const *const render_buffer = lcdc.render();
+
+		for (int column = 0; column < 40; column++)
+		{
+			u8 const *const character = render_buffer + 16 * (controller_line * 40 + column);
+			for (int glyph_y = 0; glyph_y < 8; glyph_y++)
+			{
+				for (int glyph_x = 0; glyph_x < 5; glyph_x++)
+				{
+					int const x = column * 6 + glyph_x;
+					int const y = physical_row * 9 + glyph_y;
+					if (cliprect.contains(x, y))
+						bitmap.pix(y, x) = BIT(character[glyph_y], 4 - glyph_x);
+				}
+			}
+		}
+	};
+
+	if (m_lcdc0)
+	{
+		draw_line(*m_lcdc0, 0, 0);
+		draw_line(*m_lcdc0, 1, 1);
+	}
+	if (m_lcdc1)
+	{
+		draw_line(*m_lcdc1, 2, 0);
+		draw_line(*m_lcdc1, 3, 1);
+	}
+
+	return 0;
+}
+
 void alphasmart3k_state::main_map(address_map &map)
 {
 //  map(0x0000'0000, 0x0003'ffff).ram().share("ram");
@@ -210,10 +256,20 @@ void alphasmart3k_state::alphasmart3k(machine_config &config)
 	// AlphaSmart 3000 uses a Data Image CM4040 LCD display, LCD is 40x4 according to ref
 	KS0066(config, m_lcdc0, 270'000); // TODO: Possibly wrong device type, needs confirmation; clock not measured, datasheet typical clock used
 	m_lcdc0->set_default_bios_tag("f05");
-	m_lcdc0->set_lcd_size(4, 40);
+	m_lcdc0->set_lcd_size(2, 40);
 	KS0066(config, m_lcdc1, 270'000); // TODO: Possibly wrong device type, needs confirmation; clock not measured, datasheet typical clock used
 	m_lcdc1->set_default_bios_tag("f05");
-	m_lcdc1->set_lcd_size(4, 40);
+	m_lcdc1->set_lcd_size(2, 40);
+
+	screen_device &screen(SCREEN(config, "screen", SCREEN_TYPE_LCD));
+	screen.set_refresh_hz(50);
+	screen.set_vblank_time(ATTOSECONDS_IN_USEC(2500)); // Provisional value reused from alphasma.cpp
+	screen.set_screen_update(FUNC(alphasmart3k_state::screen_update));
+	screen.set_size(6 * 40, 9 * 4);
+	screen.set_visarea_full();
+	screen.set_palette("palette");
+
+	PALETTE(config, "palette", FUNC(alphasmart3k_state::alphasmart3k_palette), 2);
 
 	RAM(config, RAM_TAG).set_default_size("256K");
 
