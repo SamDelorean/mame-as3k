@@ -1,44 +1,32 @@
-# Current Codex task — audit MC68EZ328 keyboard GPIO gaps before implementation
+# Current Codex task — implement and validate only the AS3K external keyboard latch
 
 Date: 2026-08-26
 
 Read `AGENTS.md`, `docs/as3k/STATUS.md`, and the current `docs/as3k/CODEX_RESULT.md` first.
 
-## Established dynamic result
+## Established evidence
 
-`KeyboardInitializeModule` Phase 1 has now executed completely on `asma3kdv` and returned normally to `0x00420168` with `D0 = 0`.
+The valid-AlphaWord path has executed through `KeyboardInitializeModule` Phase 1 and returned normally to caller `0x00420168` with `D0 = 0`.
 
-Observed transactions matched the historical routine exactly:
+The exact Phase-1 transaction at the board latch is:
 
-- PASEL `0xFFFFF403`: read `0x00`, write `0x7F`;
-- PADIR `0xFFFFF400`: read `0x00`, write `0x7F`;
-- PAPUEN `0xFFFFF402`: read `0x00`, write `0x00`;
-- external latch `0x00600000`: write `0xFF`;
-- PADATA `0xFFFFF401`: read `0x00`, write `0x7F`;
-- PDSEL `0xFFFFF41B`: write `0xFF`;
-- PDDIR `0xFFFFF418`: write `0x00`;
-- PDPUEN `0xFFFFF41A`: write `0x00`.
+`write byte 0xFF to 0x00600000`
 
-The latch write and PAPUEN accesses were logged as unmapped but were nonfatal. PASEL accesses also produced aligned unmapped diagnostics at `0xFFFFF402`; PDSEL did not produce an unmapped message but direct debugger readback remained zero. Direct debugger byte readbacks at the Phase-1 RTS were zero for the listed GPIO registers even where watchpoints had observed writes.
+The previous dynamic run showed this access as unmapped but nonfatal:
 
-No exception handler, keyboard interrupt handler, `InterruptInstallHandler`, or Phase-2 entry fired.
+`unmapped program memory write to 00600000 = FFFF & FF00`
 
-A direct source check after the run has already shown an important point that must now be audited carefully: `base_internal_map()` contains PADIR/PADATA and the Port-D registers, while `PASEL` is explicitly added in `mc68328_device::internal_map()` but not obviously in `mc68ez328_device::internal_map()`. Do not assume the previous static classification of PASEL support was correct.
+Historical AS3K material and the production chip-select values establish the external write-latch region at `0x00600000` with a 32 KiB chip-select window. The physical component is an 8-bit latch (74HC574-class board logic) whose eight outputs are keyboard columns X1–X8. PA0–PA6 provide X9–X15; PD0–PD7 are rows Y1–Y8.
 
-This task is **static analysis only**. Do not run MAME, rebuild, or modify source.
+The MC68EZ328 audit is complete. Treat these conclusions as established:
 
-## Goal
+- `0x00600000` is **driver/board logic**, not DragonBall core state;
+- PAPUEN, PDSEL and later PDKBEN/PKBDINT are separate core-fidelity stages;
+- EZ address `0xFFFFF403` is reserved in the processor manual and must **not** be implemented as a fake PASEL register;
+- no keyboard matrix plumbing or key mappings should be added in this stage;
+- Phase 2 must not be executed in this stage.
 
-Determine exactly what the MAME 0.289 MC68EZ328 core implements or omits for the keyboard-related Port A/Port D registers, explain the observed Phase-1 diagnostics/readbacks, and design the minimum technically correct next implementation step.
-
-The audit must distinguish:
-
-1. a driver-only missing component (`0x00600000` external latch / matrix callbacks);
-2. MC68EZ328 core mapping/state omissions;
-3. registers whose behavior can reuse existing base-class handlers/state;
-4. registers that require genuinely new state/interrupt semantics.
-
-Do not patch anything in this task.
+This task is the **first single implementation stage from the audit plan**: external latch only.
 
 ---
 
@@ -47,120 +35,151 @@ Do not patch anything in this task.
 From `~/Projects/alphasmart-as3k/mame0289`:
 
 1. `git pull --ff-only as3k-project as3k-mame0289-dev`.
-2. Confirm branch `as3k-mame0289-dev`, clean tracked status, and `git diff --check`.
-3. Confirm the latest `CODEX_RESULT.md` contains the successful dynamic Phase-1 test.
-4. Do not rebuild and do not execute any system.
+2. Confirm branch is `as3k-mame0289-dev`.
+3. Confirm tracked status is clean.
+4. Confirm HEAD contains audit commit `08816104002f27365ace1798eddd06b78550c764` and the current public `STATUS.md` says the next stage is the external latch.
+5. Run `git diff --check`.
 
----
+Do not touch `master`.
 
-## B. Audit the exact MAME 0.289 core implementation
+## B. Inspect the existing driver/map before editing
 
-Inspect at minimum:
+Inspect `src/mame/skeleton/alphasma3k.cpp` and determine the exact program-space bus width and existing address-map style.
 
-- `src/devices/machine/mc68328.cpp`
-- `src/devices/machine/mc68328.h`
+Also inspect the historical AS3K source/material already available locally only as needed to confirm how the write latch is addressed. Do not publish proprietary files.
 
-Trace all relevant declarations, state variables, save-state registration, reset defaults, handlers, callback gating, and map entries for:
+Important mapping constraint:
 
-### Port A
+- the board chip-select window is `0x00600000–0x00607FFF`;
+- the actual peripheral is an 8-bit write latch;
+- the observed Phase-1 byte transaction at `0x00600000` appears on the high byte lane (`mem_mask 0xFF00`) of the 16-bit CPU bus.
 
-- PADIR `0xFFFFF400`
-- PADATA `0xFFFFF401`
-- PAPUEN `0xFFFFF402`
-- PASEL `0xFFFFF403`
+Implement the smallest mapping that correctly represents the proven board decode and byte-lane behavior. Do not invent readable register semantics if the hardware/source evidence only establishes a write latch.
 
-### Port D
+If source evidence shows the latch is mirrored throughout the 32 KiB CS window, map the window accordingly. If only address `0x00600000` is demonstrably decoded, use the narrowest supported mapping and state the uncertainty in the result. Do not guess silently.
 
-- PDDIR `0xFFFFF418`
-- PDDATA `0xFFFFF419`
-- PDPUEN `0xFFFFF41A`
-- PDSEL `0xFFFFF41B`
-- PDPOL `0xFFFFF41C`
-- PDIRQEN `0xFFFFF41D`
-- PKBDINT `0xFFFFF41E`
-- PDIRQEDGE `0xFFFFF41F`
+## C. Implement only the external latch in `alphasma3k_state`
 
-For every register, report:
+Add only what is needed for this board component:
 
-- whether it is mapped for `mc68ez328_device`, not merely for the original `mc68328_device`;
-- handler name if present;
-- backing state variable if present;
-- reset value;
-- whether state is registered for save-state;
-- effect on output callbacks or input reads;
-- interrupt behavior if applicable.
+1. one 8-bit latch state variable;
+2. `save_item()` registration;
+3. deterministic initialization/reset;
+4. a write handler and program-map entry at the supported decode/window;
+5. optional narrow logging only if useful for validation and not noisy.
 
-Pay special attention to inheritance: `base_internal_map(0xFFFFF000, map)` versus additions made only by `mc68328_device::internal_map()`.
+Reset-value rule:
 
-## C. Explain the Phase-1 observations
+- the physical power-on value has not been established;
+- choose a deterministic emulator reset value appropriate for safe/no-column-active behavior, preferably `0xFF` if consistent with the scan polarity and existing Phase-1 behavior;
+- explicitly document it as an **emulator initialization choice**, not a measured hardware reset fact.
 
-Using the actual handler code, explain why the dynamic run could observe bus writes yet debugger readback at RTS showed zero for PADIR/PADATA/etc.
+The handler must retain the written byte so the Phase-1 `0xFF` write can be demonstrated as mapped and stored.
 
-Do not guess. Determine whether the cause is one or more of:
+Do **not** in this task:
 
-- register genuinely unmapped;
-- read handler masks/gates with select/direction state;
-- debugger `b@` access behavior;
-- callbacks unset;
-- another implementation detail visible in the core.
+- connect latch bits to a keyboard matrix;
+- add PA callbacks;
+- add PD callbacks;
+- add `INPUT_PORTS` keys;
+- implement PAPUEN;
+- implement PDSEL;
+- implement PDKBEN/PKBDINT;
+- modify `mc68328.cpp` or `mc68328.h`;
+- execute `KeyboardInitializeModulePhase2`;
+- modify LCD behavior;
+- modify diagnostic ROM definitions unless absolutely required (it should not be).
 
-If static source alone cannot prove the readback explanation, state exactly what remains unproven and design one future narrow debugger check; do not execute it now.
+## D. Build and static checks
 
-## D. Verify against AlphaSmart/DragonBall definitions
+Run:
 
-Use the local historical AS3000 material and available Motorola register definitions already archived in the project, especially `M68328EZ.h` and any locally available MC68EZ328 manual/documentation.
+```sh
+make SUBTARGET=alphasma3k SOURCES=src/mame/skeleton/alphasma3k.cpp OSD=sdl REGENIE=1 -j2
+```
 
-For PASEL, PAPUEN, PDSEL and PKBDINT, establish:
+No clean build.
 
-- documented address;
-- bit meaning relevant to the AS3K;
-- reset value if available;
-- read/write semantics;
-- whether the existing MAME base-class model has an analogous implementation that can be reused safely.
+Then verify:
 
-Do not broaden into unrelated DragonBall peripherals.
+- build succeeds;
+- four drivers are still present;
+- `git diff --check` passes;
+- `asma3kdi` and `asma3kdv` ROM audits remain good with the existing local fixtures.
 
-## E. Determine the minimum implementation boundary
+Do not run original `asma3k`.
 
-Produce a concrete implementation plan, but do not implement it.
+## E. Narrow dynamic validation
 
-Classify each needed change as one of:
+Create a local-only debugger script under `../diagnostic/`, for example:
 
-- **driver-only** — belongs in `alphasma3k_state` / AS3K address map or input model;
-- **MC68EZ328 core mapping fix** — existing state/handler can be mapped for EZ;
-- **MC68EZ328 core state/behavior addition** — new register state/semantics required;
-- **defer** — not required until later keyboard interrupt behavior.
+`as3kdv_keyboard_latch.cmd`
 
-The plan must specifically answer:
+Use explicit `0x...` literals.
 
-1. Is adding `PASEL` to `mc68ez328_device::internal_map()` sufficient for Port-A select behavior, or is more required?
-2. Does PAPUEN need new state/handlers, and does AS3K Phase 1 functionally depend on it beyond fidelity?
-3. Does PDSEL need new state/handlers, or is Port D effectively hardwired GPIO in the current core?
-4. What exact role should PKBDINT have, and can it be deferred until `KeyboardEnableKeyboardInterrupt` is reached?
-5. Can the external `0x00600000` latch be modeled entirely in the AS3K driver as an 8-bit write latch with saved state?
-6. What callback/matrix structure will eventually be required for PA0–PA6 output columns and PD0–PD7 input rows, without implementing key mappings yet?
+Run only `asma3kdv` with an 8-second safety limit.
 
-Prefer the smallest correct patch sequence. Do not combine core fixes, latch, matrix, and Phase 2 into one future implementation if they can be validated independently.
+The script must:
 
-## F. Publication
+1. mark Phase-1 entry `0x0042E2A8`;
+2. watch the exact latch transaction at `0x00600000`;
+3. verify the write data is `0xFF`;
+4. immediately after the write, prove the driver's saved latch state has become `0xFF` using the narrowest practical evidence available (handler log, debugger-visible mapping/state if exposed, or a temporary local diagnostic observation that is removed before commit);
+5. confirm the access no longer produces the previous unmapped `0x00600000` message;
+6. continue through the Phase-1 RTS and caller return `0x00420168` with `D0 = 0`;
+7. include safety breaks for Phase 2, keyboard interrupt handler, `InterruptInstallHandler`, and the established exception handlers.
 
-Replace `docs/as3k/CODEX_RESULT.md` with a factual report containing:
+Do not scan keys and do not continue beyond the caller return.
 
-- exact files and historical references inspected;
-- register-by-register MC68EZ328 support table;
-- explanation of the dynamic Phase-1 unmapped messages/readbacks;
-- confirmed inaccuracies, if any, in the previous static support classification;
-- minimum patch plan by layer (driver vs core);
-- which issues can safely be deferred;
-- proposed next single implementation/test stage;
-- `git diff --check` and final status.
+If the new mapping causes an exception, wrong byte-lane behavior, repeated/mirrored writes inconsistent with evidence, or regression before caller return, stop and report before broadening the patch.
 
-Commit only the documentation result and push only to `as3k-project/as3k-mame0289-dev`.
+## F. Regression boundary
 
-Do not change MAME source, `mame.lst`, ROM definitions, fixtures, binaries, or diagnostic files.
+Confirm that this driver-only latch change does not alter previously validated unrelated behavior:
+
+- `asma3kdi` startup diagnostic remains valid/auditable;
+- `asma3kdv` valid-AlphaWord path still reaches and returns from Phase 1;
+- no MAME core file changed;
+- LCD bridge source is unchanged except unavoidable context lines.
+
+A full re-run of every LCD debugger script is not required unless the code diff unexpectedly touches LCD-related logic.
+
+## G. Publication and public handoff
+
+At the end:
+
+1. run `git diff --check`;
+2. inspect `git status --short`;
+3. inspect the exact diff;
+4. ensure no `roms/`, proprietary firmware, historical binary/source archive, CGROM, diagnostic fixture, local debugger script/log, generated binary, or build artifact is staged;
+5. replace `docs/as3k/CODEX_RESULT.md` with a factual report containing:
+   - exact driver changes;
+   - exact map range and byte-lane handling chosen, with evidence;
+   - reset value and explicit statement that it is an emulator choice if hardware reset is unknown;
+   - build/audit result;
+   - observed latch write and retained value;
+   - whether the old unmapped message disappeared;
+   - Phase-1 RTS/caller-return result and D0;
+   - safety-break result;
+   - final `git diff --check` and status;
+6. update `docs/as3k/STATUS.md` only if necessary to keep the public handoff factual after the implementation;
+7. commit only safe source/documentation changes;
+8. push only to `as3k-project/as3k-mame0289-dev`.
+
+## Pass criteria
+
+Pass means all of the following are true:
+
+- the external board latch is modeled in `alphasma3k_state` without a core modification;
+- Phase 1 writes `0xFF` through the correct byte lane and the latch retains `0xFF`;
+- the old unmapped `0x00600000` message is gone;
+- Phase 1 still returns normally to `0x00420168` with `D0 = 0`;
+- no Phase 2/interrupt/error handler is entered;
+- build and existing diagnostic audits pass;
+- only safe driver/documentation changes are committed and pushed.
 
 ## Stop condition
 
-Stop after the static core audit and implementation plan.
+Stop after validating the external latch and publishing the result.
 
-**Do not execute keyboard Phase 2 and do not implement any keyboard/core change in this task.**
+**Do not add the keyboard matrix, key mappings, PAPUEN, PDSEL, PDKBEN/PKBDINT, or execute Phase 2 in this task.**
