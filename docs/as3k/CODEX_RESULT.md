@@ -58,6 +58,12 @@ Command:
 - Both `LCD_Reset` calls completed their four write/read-busy sequences; execution then reached later writes. The subsequent E1/TOP operation remained busy.
 - The final breakpoint at `0x0043079e` was not reached before the time limit.
 
-## Files and final state before handoff commit
+## Recovery, reconciliation, and publication
 
-Tracked worktree changes are `src/mame/mame.lst`, `src/mame/skeleton/alphasma3k.cpp`, `scripts/as3k/codex-next.sh`, and this result file. `roms/asma3kdvl/ks0066_f05.bin` and all diagnostic logs remain outside Git. Because the runtime gate failed, only the safe wrapper/result handoff files are eligible for this commit; source/list remain intentionally uncommitted for the next diagnostic stage.
+- Recovered completed local result commit `4c673eb6cf6a412b7f6bd9d11b14598e9885df35`; it contains only `docs/as3k/CODEX_RESULT.md` and `scripts/as3k/codex-next.sh`.
+- Fetched remote commit `411e5b78` and merged its current recovery handoff without discarding the completed local result or the uncommitted source diff. The merge commit is `f9807f77`.
+- Inspected the source/list diff, staged only those two tracked files, and committed the validated diagnostic systems and GPIO-to-KS0066 bridge as `2e9b5838` (`as3k: add LCD controller diagnostic system`).
+- `git diff --check` passed. No file below `roms/`, no diagnostic log, and no proprietary artifact was staged or committed.
+- Publication was attempted over HTTPS, but Git reported `could not read Username for 'https://github.com': Device not configured`. SSH was also checked after accepting GitHub's ED25519 host key and reported `Permission denied (publickey)`. Therefore the local branch is ready but cannot be pushed until GitHub credentials are configured in this environment.
+- Final tracked worktree status before committing this report: only `docs/as3k/CODEX_RESULT.md` is modified. After this report commit, the expected status is clean and the branch is ahead of `as3k-project/as3k-mame0289-dev` by four commits.
+- Local-only `roms/asma3kdvl/ks0066_f05.bin`, generated build products, and diagnostic logs remain ignored and outside Git.
