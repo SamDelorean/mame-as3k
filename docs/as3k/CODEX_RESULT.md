@@ -63,4 +63,4 @@ Local logs, not staged: `../diagnostic/as3kdvl_lcd_composite_console.log` and `.
 
 Safe tracked files: `src/mame/skeleton/alphasma3k.cpp` and `docs/as3k/CODEX_RESULT.md`. No ROM, diagnostic log, screenshot, generated binary, proprietary artifact, MAME core, or driver-list change is included.
 
-The implementation/publication commit SHA and push result are recorded in the final task response because a commit cannot include its own SHA. Final `git status --short` is expected to be clean after publication and is verified there.
+Implementation commit: `38528ee8` (`38528ee8ffca9ff718d87e88145cae92d9e0134a`). Push result: successful to `as3k-project/as3k-mame0289-dev` (`3fa88a33..38528ee8`). Final `git status --short` after the documentation follow-up commit and push was clean.
