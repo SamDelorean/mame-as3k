@@ -1,277 +1,181 @@
-# Current Codex task — implement the AS3K 40×4 composite LCD screen
+# Current Codex task — study `SystemInstallExceptionVectors` before execution
 
 Date: 2026-08-26
 
 Read `AGENTS.md` and the current `docs/as3k/CODEX_RESULT.md` first.
 
-## Established evidence
+## Established state
 
-The previous static study is complete and published. Treat these points as established for this task:
+The AS3K LCD path is now validated through `LCDInitializeModule` and the composite 40×4 screen infrastructure is present:
 
-- E1 / `ks0066_0` drives physical rows 1–2.
-- E2 / `ks0066_1` drives physical rows 3–4.
-- Within each controller, line 0 is DDRAM base `0x00`; line 1 is DDRAM base `0x40`.
-- AlphaWord configures the LCD controllers for two-line mode.
-- Each controller therefore provides two meaningful 40-character rows.
-- `hd44780_base_device::render()` returns 80 character slots in this mode, with 16 bytes reserved per character; bytes 0–7 contain the 5×8 glyph rows and bits 4..0 are the five pixels.
-- Final physical geometry is 40×4 character cells, each 6×9 pixels: **240×36 pixels**.
-- The current atomic GPIO↔KS0066 bridge is validated and must remain semantically unchanged.
-- The existing `set_lcd_size(4,40)` on each controller is visually incorrect and should become `set_lcd_size(2,40)`.
+- atomic Port C bridge validated;
+- two KS0066 devices complete LCD initialization with finite busy polling;
+- composite screen is 240×36, rows 1–2 from E1/`ks0066_0`, rows 3–4 from E2/`ks0066_1`;
+- both controllers are configured visually as 2×40;
+- no-LCD and KS0066 regressions pass;
+- execution is still intentionally stopped at the `LCDInitializeModule` RTS `0x0043079e`.
 
-This task implements only the display infrastructure. Do **not** yet create the patterned CGROM or visual-test firmware/fixture.
+The next real AlphaWord primary-module call is:
+
+`SystemInstallExceptionVectors = 0x00430504`
+
+followed by:
+
+`KeyboardInitializeModule = 0x0042e2a8`.
+
+The synthetic four-row visual fixture is deliberately deferred; do not create it in this task.
 
 ## Goal
 
-Add a real composite LCD screen to `src/mame/skeleton/alphasma3k.cpp`, preserving all validated protocol behavior.
+Perform an **evidence-first static study** of `SystemInstallExceptionVectors` and any directly called exception handlers/helpers so the following task can execute it with exact watchpoints and expected RAM/vector values.
 
-At the end we must have:
+This task is static only.
 
-1. one 240×36 `SCREEN_TYPE_LCD` owned by the AS3K driver;
-2. rows 1–2 drawn from `ks0066_0->render()`;
-3. rows 3–4 drawn from `ks0066_1->render()`;
-4. both KS0066 configured visually as 2×40;
-5. existing no-LCD diagnostics still working when the optional KS0066 devices are removed;
-6. `asma3kdvl` still completing `LCDInitializeModule` with finite real busy polling and no `0x8f` loop.
-
-Do not proceed to later AlphaWord modules, keyboard, or opening-screen execution.
+**Do not modify source code.**
+**Do not rebuild.**
+**Do not run an emulated AS3K system.**
+**Do not continue into keyboard.**
 
 ---
 
-## A. Pre-edit gate
+## A. Repository / source gate
 
-From `~/Projects/alphasmart-as3k/mame0289`:
+From:
+
+`~/Projects/alphasmart-as3k/mame0289`
 
 1. `git pull --ff-only as3k-project as3k-mame0289-dev`.
 2. Confirm branch is `as3k-mame0289-dev` and tracked status is clean.
-3. Read the current:
-   - `src/mame/skeleton/alphasma3k.cpp`;
-   - `src/mame/skeleton/alphasma.cpp` rendering/palette/configuration;
-   - relevant `hd44780.cpp/.h` `render()` semantics if needed.
-4. Confirm the current atomic bridge code is exactly the validated implementation from commit `0b414444` or its unchanged descendant.
-
-If the bridge has changed unexpectedly, stop and report before editing.
+3. Confirm current branch includes composite-LCD implementation commit `38528ee8ffca9ff718d87e88145cae92d9e0134a` or a clean descendant.
+4. Do not edit `alphasma3k.cpp` or any MAME source.
 
 ---
 
-## B. Implement the composite renderer only in `alphasma3k.cpp`
+## B. Locate the original AlphaSmart source/listing
 
-### 1. Remove unused temporary bitmap state
+Search the local archived AS3000 material for the source and linked listing corresponding to `SystemInstallExceptionVectors`.
 
-The current `m_tmp_bitmap` member in `alphasmart3k_state` is unused. Remove it if it is still present. Do not introduce a replacement temporary bitmap.
+Prioritize original artifacts such as:
 
-### 2. Add palette function
+- `ModuleSources/SystemModule.c` / related headers;
+- `SystemModule.o.lst` or equivalent linked listing;
+- `AWordRAM01.out` / symbol map;
+- AlphaWord `.map`, `.lst`, or linker outputs already used in prior tasks.
 
-Add a driver palette initializer in MAME style, using the existing AlphaSmart palette provisionally:
+Report the exact source function and any constants/types it depends on.
 
-- pen 0 / LCD background: `rgb_t(138, 146, 148)`
-- pen 1 / active pixel: `rgb_t(92, 83, 88)`
-
-Document briefly that these colors are reused provisionally from `alphasma.cpp`, not claimed as a measured AS3K color calibration.
-
-### 3. Add driver-owned `screen_update`
-
-Add a `uint32_t screen_update(screen_device &, bitmap_ind16 &, const rectangle &cliprect)` member.
-
-Required behavior:
-
-- fill `cliprect` with palette pen 0 first;
-- tolerate either/both optional KS0066 devices being absent;
-- call `render()` only on a device that exists;
-- compose the physical rows exactly:
-  - physical row 0 <- `ks0066_0`, controller line 0
-  - physical row 1 <- `ks0066_0`, controller line 1
-  - physical row 2 <- `ks0066_1`, controller line 0
-  - physical row 3 <- `ks0066_1`, controller line 1
-- for each physical row `r=0..3`, column `c=0..39`, glyph row `gy=0..7`, glyph pixel `gx=0..4`:
-  - source character offset = `16 * (controller_line * 40 + c)`;
-  - source byte = `render_buffer[offset + gy]`;
-  - screen position = `(x = c*6 + gx, y = r*9 + gy)`;
-  - active pixel is `BIT(source_byte, 4-gx)`;
-- leave cell column `x=5` and cell row `y=8` as background spacing by virtue of the initial fill;
-- respect `cliprect` when writing pixels;
-- return `0`.
-
-Do not alter DDRAM, CGRAM, AC, busy state, cursor state, or bridge state. The renderer must be read-only with respect to emulated LCD protocol state.
-
-Prefer a small local helper/lambda for drawing one controller line if it improves clarity, but keep the implementation simple and MAME-style.
-
-### 4. Correct controller visual geometry
-
-Change both:
-
-```cpp
-set_lcd_size(4, 40)
-```
-
-to:
-
-```cpp
-set_lcd_size(2, 40)
-```
-
-Do not change clock, BIOS selection, hashes, or device type.
-
-### 5. Add screen and palette devices
-
-In `alphasmart3k(machine_config &config)`, add one LCD screen with:
-
-- `SCREEN_TYPE_LCD`;
-- logical size `240 × 36` (`6*40`, `9*4` is fine);
-- full visible area;
-- driver `screen_update` callback;
-- palette bound to the new two-entry palette;
-- refresh/vblank values consistent with `alphasma.cpp` unless the exact MAME 0.289 API requires equivalent syntax. Use 50 Hz and the same provisional vblank if directly reusable.
-
-Add a two-entry `PALETTE` using the driver palette initializer.
-
-The derived `alphasmart3k_diag` configuration removes only the two KS0066 devices. The screen/palette may remain; the renderer must then produce a blank background without crashing. Do not remove the screen from diagnostic configs unless there is a proven MAME configuration reason to do so.
-
-### 6. Do not touch
-
-Do not modify:
-
-- `src/devices/machine/mc68328.cpp/.h`;
-- `src/devices/video/hd44780.cpp/.h`;
-- the atomic Port C bridge semantics;
-- ROM definitions/hashes;
-- `mame.lst` unless no semantic change is required;
-- diagnostic fixture binaries;
-- anything under `roms/`;
-- keyboard, USB, serial, interrupts, later firmware modules.
+If the standalone source is absent, use the linked listing and symbol map and state that explicitly.
 
 ---
 
-## C. Static checks and build
+## C. Correlate the exact Flash-linked function
 
-1. Run `git diff --check`.
-2. Inspect the complete `alphasma3k.cpp` diff before build and confirm it contains only:
-   - palette/screen renderer;
-   - screen/palette machine configuration;
-   - 2×40 geometry correction;
-   - removal of unused temporary bitmap if applicable.
-3. Incremental build, no clean:
+Using the local AlphaWord fixture/listing artifacts, determine precisely:
 
-```sh
-make SUBTARGET=alphasma3k \
-  SOURCES=src/mame/skeleton/alphasma3k.cpp \
-  OSD=sdl \
-  REGENIE=1 \
-  -j2
-```
+1. start address: expected `0x00430504`;
+2. exact end/RTS address and byte length;
+3. every direct call made by the function;
+4. every RAM address written;
+5. every exception-vector entry written;
+6. exact handler address stored in each vector;
+7. whether writes are byte/word/long and expected big-endian debugger transaction behavior;
+8. whether the function touches any MC68EZ328 internal hardware register (`0xffffxxxx`) or external hardware window (`0x0060xxxx`);
+9. whether it modifies SR, stack pointer, VBR-like state, interrupt mask, or any CPU-specific control state;
+10. whether any helper can fail/assert/loop.
 
-Save output to:
+Compare the linked Flash bytes against the historical source/listing and account for relocations exactly as done for Interrupt/Timer/LCD.
 
-`../diagnostic/rebuild_lcd_composite_screen.log`
-
-Expect 1 source, 4 drivers, successful link.
-
-4. Confirm:
-
-```sh
-./alphasma3k asma3kdi -verifyroms
-./alphasma3k asma3kdv -verifyroms
-```
-
-remain good.
-
-5. Use `-listxml` (or another non-emulating metadata command if MAME syntax differs) to confirm `asma3kdvl` exposes exactly one LCD display with width 240 and height 36. Record the exact display metadata/refresh value. Do not use `asma3kdvl -verifyroms` as a success criterion because its synthetic F05 intentionally has the wrong checksum.
+Do not infer names from addresses if the symbol/listing evidence is available.
 
 ---
 
-## D. No-LCD regression
+## D. Reconstruct the exception-vector table changes
 
-Run the established no-LCD diagnostic unchanged:
+Build a precise table with at least:
 
-```sh
-./alphasma3k asma3kdv \
-  -debug \
-  -debugscript ../diagnostic/as3kdv_lcd_nolcd.cmd \
-  -log \
-  -seconds_to_run 8
-```
+`vector number -> vector-table RAM address -> handler symbol -> handler Flash address -> write size`
 
-Save the result separately as, for example:
+Use 68k vector numbering correctly: vector N occupies `N * 4` in the vector table unless the AlphaSmart source explicitly does something different.
 
-`../diagnostic/as3kdv_lcd_composite_nolcd_regression.log`
+Determine whether the function installs handlers for, for example, bus error, address error, illegal instruction, divide-by-zero, CHK, TRAPV, privilege violation, trace, line-A/F, spurious interrupt, traps, or only a subset. Do not assume the list; derive it from the source/bininary.
 
-Required behavior:
+Also distinguish any vectors already written by earlier modules:
 
-- both LCD resets reached;
-- 11 WriteByte / 11 ReadByte / 22 PCDATA reads / 11 busy branches as before;
-- reconstructed reads remain `0x00`;
-- all busy branches exit rather than loop;
-- final breakpoint at `0x0043079e` reached;
-- no crash or screen-update error despite the two LCD devices being absent.
+- Startup Manager TRAP 0 setup at RAM `0x00000080` if still relevant;
+- InterruptInitializeModule level 4/5/6 vectors at RAM `0x00000110`, `0x00000114`, `0x00000118`.
 
-If this regression changes, stop and report. Do not attempt a second fix.
+Report whether `SystemInstallExceptionVectors` overwrites any previously established vector or leaves them intact.
 
 ---
 
-## E. KS0066 protocol regression with screen present
+## E. Inspect the installed handlers just enough for execution planning
 
-Use the existing local-only zero CGROM:
+For each handler installed by `SystemInstallExceptionVectors`, inspect only enough static code/source to answer:
 
-`roms/asma3kdvl/ks0066_f05.bin`
+- does it immediately return (`RTE`) or enter a diagnostic/reset/assert path?
+- does it reference hardware not yet emulated?
+- does it write a recognizable RAM diagnostic/signature?
+- does it intentionally loop?
+- is any handler expected to execute during normal initialization, or are these only safety vectors?
 
-It must remain exactly 4096 zero bytes with the previously recorded hashes. Regenerate only if missing; never stage it.
-
-Run the existing controller script:
-
-```sh
-./alphasma3k asma3kdvl \
-  -debug \
-  -debugscript ../diagnostic/as3kdvl_lcd_controller.cmd \
-  -log \
-  -seconds_to_run 8
-```
-
-Preserve under new names, e.g.:
-
-- `../diagnostic/as3kdvl_lcd_composite_console.log`
-- `../diagnostic/as3kdvl_lcd_composite.log`
-
-Success criteria:
-
-- only expected synthetic F05 WRONG CHECKSUMS warnings;
-- no required-file failure;
-- finite busy polling is acceptable and desirable;
-- any busy=1 condition must clear;
-- `0x8f` must not reappear;
-- no E1/E2 contention;
-- both `LCD_Reset` calls and `LCDMoveCursor` complete;
-- final `0x0043079e` breakpoint reached before timeout;
-- no screen/palette/rendering error or crash.
-
-Report counts and distinct `LCD_ReadByte` values, but do not require them to be byte-for-byte identical if screen scheduling slightly changes finite busy timing. Explain any difference.
-
-Do not continue beyond the LCD RTS.
+Do **not** recursively reverse engineer entire error subsystems. Stop once normal-path implications are clear.
 
 ---
 
-## F. Publication
+## F. Check MAME 68000/MC68EZ328 compatibility relevant to this routine
 
-If all gates pass:
+Inspect MAME 0.289 source only as needed to determine whether the exact operations used by `SystemInstallExceptionVectors` require anything beyond ordinary RAM vector writes and normal 68k execution.
+
+In particular verify whether the MC68EZ328/68000 model uses the base vector table at address 0 (no relocatable VBR in this CPU generation) for the vectors being installed, unless source/core evidence shows otherwise.
+
+Identify any credible emulator limitation that could affect this function itself. Do not propose fixes without evidence.
+
+---
+
+## G. Design the next narrow dynamic test, but do not run it
+
+Based on the static result, specify an exact debugger plan for the next task:
+
+- entry breakpoint at `0x00430504`;
+- watchpoints on the exact vector-table RAM ranges written by the function;
+- any helper/return breakpoint needed;
+- final breakpoint at `KeyboardInitializeModule = 0x0042e2a8`, stopping before keyboard executes;
+- expected final values at every changed vector entry.
+
+Use explicit `0x...` literals in all proposed MAME debugger commands/lengths.
+
+If long writes will appear as two 16-bit debugger transactions, state the expected high/low halves.
+
+The dynamic test should prove only that `SystemInstallExceptionVectors` writes the expected vectors and returns into `KeyboardInitializeModule` without exception or hang.
+
+Do not run this test now.
+
+---
+
+## H. Publication
+
+This is a no-source-change task.
+
+At the end:
 
 1. `git diff --check`.
 2. `git status --short`.
-3. Ensure no ROM, diagnostic log, screenshot, generated binary, or proprietary artifact is staged.
+3. Confirm no MAME source changed.
 4. Replace `docs/as3k/CODEX_RESULT.md` with a factual report containing:
-   - exact renderer implementation and row map;
-   - pixel/cell geometry;
-   - palette values and provisional status;
-   - confirmation both KS0066 are now 2×40;
-   - exact screen metadata from `-listxml`;
-   - build result;
-   - no-LCD regression result;
-   - KS0066 protocol regression result;
-   - confirmation atomic bridge semantics were not changed;
-   - `git diff --check` and final status;
-   - commit SHA and push result.
-5. Commit only safe tracked source/docs changes.
+   - exact source/listing artifacts found;
+   - exact linked range and RTS;
+   - every direct call/helper;
+   - complete vector-write table;
+   - whether earlier Startup/Interrupt vectors are preserved or overwritten;
+   - handler addresses and concise normal-path behavior;
+   - any hardware accesses or emulator risks;
+   - exact next debugger/watchpoint plan;
+   - `git diff --check` and final Git status.
+5. Commit only the safe documentation result.
 6. Push only to `as3k-project/as3k-mame0289-dev`.
 
 ## Stop condition
 
-Stop after the **240×36 composite screen infrastructure is implemented and regression-tested**.
+Stop after `SystemInstallExceptionVectors` is fully correlated statically and the next dynamic test is specified.
 
-Do **not** yet generate the patterned synthetic CGROM, create the four-row visual test fixture, take visual screenshots, continue to the AlphaWord opening screen, or implement keyboard/later modules.
+**Do not execute the function yet. Do not enter `KeyboardInitializeModule`. Do not modify MAME source.**
