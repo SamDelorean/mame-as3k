@@ -74,27 +74,25 @@ protected:
 	required_region_ptr<u16> m_ipl;
 
 	std::unique_ptr<bitmap_ind16> m_tmp_bitmap;
-	u8 m_lcd_data = 0;
-	bool m_lcd_rw = false;
-	bool m_lcd_rs = false;
-	bool m_lcd_e1 = false;
-	bool m_lcd_e2 = false;
+	u8 m_lcd_port_c_pending = 0;
+	u8 m_lcd_port_c_applied = 0;
 
 	virtual void machine_start() override ATTR_COLD;
 	virtual void machine_reset() override ATTR_COLD;
 
 private:
 	void main_map(address_map &map) ATTR_COLD;
-	void lcd_data_w(unsigned bit, int state);
+	void lcd_port_c_w(unsigned bit, int state);
+	void lcd_port_c_commit();
 	u8 lcd_data_r();
-	void lcd_db4_w(int state) { lcd_data_w(0, state); }
-	void lcd_db5_w(int state) { lcd_data_w(1, state); }
-	void lcd_db6_w(int state) { lcd_data_w(2, state); }
-	void lcd_db7_w(int state) { lcd_data_w(3, state); }
-	void lcd_rw_w(int state);
-	void lcd_rs_w(int state);
-	void lcd_e1_w(int state);
-	void lcd_e2_w(int state);
+	void lcd_db4_w(int state) { lcd_port_c_w(0, state); }
+	void lcd_db5_w(int state) { lcd_port_c_w(1, state); }
+	void lcd_db6_w(int state) { lcd_port_c_w(2, state); }
+	void lcd_db7_w(int state) { lcd_port_c_w(3, state); }
+	void lcd_rw_w(int state) { lcd_port_c_w(4, state); }
+	void lcd_rs_w(int state) { lcd_port_c_w(5, state); }
+	void lcd_e1_w(int state) { lcd_port_c_w(6, state); }
+	void lcd_e2_w(int state) { lcd_port_c_w(7, state); }
 	int lcd_db4_r() { return BIT(lcd_data_r(), 0); }
 	int lcd_db5_r() { return BIT(lcd_data_r(), 1); }
 	int lcd_db6_r() { return BIT(lcd_data_r(), 2); }
@@ -106,11 +104,8 @@ void alphasmart3k_state::machine_start()
 	address_space &space = m_maincpu->space(AS_PROGRAM);
 	space.install_ram(0x00000000, m_ram->size() - 1, m_ram->pointer());
 
-	save_item(NAME(m_lcd_data));
-	save_item(NAME(m_lcd_rw));
-	save_item(NAME(m_lcd_rs));
-	save_item(NAME(m_lcd_e1));
-	save_item(NAME(m_lcd_e2));
+	save_item(NAME(m_lcd_port_c_pending));
+	save_item(NAME(m_lcd_port_c_applied));
 }
 
 void alphasmart3k_state::machine_reset()
@@ -119,21 +114,51 @@ void alphasmart3k_state::machine_reset()
 	// dc.w 1111 is vector $2c
 	memcpy(m_ram->pointer(), memregion("ipl")->base(), 0x100);
 
-	m_lcd_data = 0;
-	m_lcd_rw = false;
-	m_lcd_rs = false;
-	m_lcd_e1 = false;
-	m_lcd_e2 = false;
+	m_lcd_port_c_pending = 0;
+	m_lcd_port_c_applied = 0;
 }
 
-void alphasmart3k_state::lcd_data_w(unsigned bit, int state)
+void alphasmart3k_state::lcd_port_c_w(unsigned bit, int state)
 {
-	m_lcd_data = (m_lcd_data & ~(1U << bit)) | (state << bit);
+	m_lcd_port_c_pending = (m_lcd_port_c_pending & ~(1U << bit)) | (state << bit);
+
+	// The MC68EZ328 core publishes selected Port C bits from 0 through 7, and
+	// AlphaWord selects all eight here, so PC7 completes one PCDATA write.
+	if (bit == 7)
+		lcd_port_c_commit();
+}
+
+void alphasmart3k_state::lcd_port_c_commit()
+{
+	u8 const old_data = m_lcd_port_c_applied;
+	u8 const new_data = m_lcd_port_c_pending;
+
+	// Falling enables sample the old bus and controls.
+	if (m_lcdc0 && BIT(old_data, 6) && !BIT(new_data, 6))
+		m_lcdc0->e_w(0);
+	if (m_lcdc1 && BIT(old_data, 7) && !BIT(new_data, 7))
+		m_lcdc1->e_w(0);
 
 	if (m_lcdc0)
-		m_lcdc0->db_w(m_lcd_data << 4);
+	{
+		m_lcdc0->db_w((new_data & 0x0f) << 4);
+		m_lcdc0->rw_w(BIT(new_data, 4));
+		m_lcdc0->rs_w(BIT(new_data, 5));
+	}
 	if (m_lcdc1)
-		m_lcdc1->db_w(m_lcd_data << 4);
+	{
+		m_lcdc1->db_w((new_data & 0x0f) << 4);
+		m_lcdc1->rw_w(BIT(new_data, 4));
+		m_lcdc1->rs_w(BIT(new_data, 5));
+	}
+
+	// Rising enables observe the new bus and controls.
+	if (m_lcdc0 && !BIT(old_data, 6) && BIT(new_data, 6))
+		m_lcdc0->e_w(1);
+	if (m_lcdc1 && !BIT(old_data, 7) && BIT(new_data, 7))
+		m_lcdc1->e_w(1);
+
+	m_lcd_port_c_applied = new_data;
 }
 
 u8 alphasmart3k_state::lcd_data_r()
@@ -141,47 +166,15 @@ u8 alphasmart3k_state::lcd_data_r()
 	if (!m_lcdc0 && !m_lcdc1)
 		return 0x00;
 
-	if (m_lcd_e1 && !m_lcd_e2)
+	if (BIT(m_lcd_port_c_applied, 6) && !BIT(m_lcd_port_c_applied, 7))
 		return m_lcdc0 ? m_lcdc0->db_r() >> 4 : 0x0f;
-	if (!m_lcd_e1 && m_lcd_e2)
+	if (!BIT(m_lcd_port_c_applied, 6) && BIT(m_lcd_port_c_applied, 7))
 		return m_lcdc1 ? m_lcdc1->db_r() >> 4 : 0x0f;
-	if (!m_lcd_e1 && !m_lcd_e2)
+	if (!BIT(m_lcd_port_c_applied, 6) && !BIT(m_lcd_port_c_applied, 7))
 		return 0x0f;
 
 	logerror("%s: both KS0066 enable lines asserted during read\n", machine().describe_context());
 	return 0x0f;
-}
-
-void alphasmart3k_state::lcd_rw_w(int state)
-{
-	m_lcd_rw = state;
-	if (m_lcdc0)
-		m_lcdc0->rw_w(state);
-	if (m_lcdc1)
-		m_lcdc1->rw_w(state);
-}
-
-void alphasmart3k_state::lcd_rs_w(int state)
-{
-	m_lcd_rs = state;
-	if (m_lcdc0)
-		m_lcdc0->rs_w(state);
-	if (m_lcdc1)
-		m_lcdc1->rs_w(state);
-}
-
-void alphasmart3k_state::lcd_e1_w(int state)
-{
-	m_lcd_e1 = state;
-	if (m_lcdc0)
-		m_lcdc0->e_w(state);
-}
-
-void alphasmart3k_state::lcd_e2_w(int state)
-{
-	m_lcd_e2 = state;
-	if (m_lcdc1)
-		m_lcdc1->e_w(state);
 }
 
 void alphasmart3k_state::main_map(address_map &map)
