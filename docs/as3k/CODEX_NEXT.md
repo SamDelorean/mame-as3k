@@ -1,189 +1,315 @@
-# Current Codex task — prove or reject the LCD Port C atomicity hypothesis
+# Current Codex task — fix Port C atomicity in the AS3K LCD bridge
 
 Date: 2026-08-26
 
 Read `AGENTS.md` first and obey it.
 
-## Context already established
+## Established root cause
 
-The previous `asma3kdvl` experiment is published in `docs/as3k/CODEX_RESULT.md` and must **not** be repeated blindly.
+The previous task proved the LCD busy-loop failure. Read the current `docs/as3k/CODEX_RESULT.md` before editing.
 
-Key observed result:
+The defect is now evidence-backed:
 
-- both `LCD_Reset` calls completed;
-- 9 busy polls exited normally with reconstructed byte `0x00`;
-- a later E1/TOP operation became stuck reading `0x8f`;
-- high nibble `0x8`, low nibble `0xf`;
-- busy remained set and the loop returned to `0x00430e28` hundreds of thousands of times;
-- no E1/E2 contention occurred.
+- `mc68328_base_device::pcdata_w()` stores one byte but invokes `out_port_c` callbacks sequentially from bit 0 through bit 7;
+- AlphaWord performs the final cleanup of a 4-bit LCD read with one PCDATA byte write that drops R/W and E together;
+- the bridge currently forwards PC4/RW immediately, before PC6/E1 or PC7/E2 receives the falling edge;
+- therefore the KS0066 sees E falling after R/W has already become 0;
+- `hd44780_base_device::e_w(0)` interprets that edge as a write;
+- the bridge DB nibble is `0xf`, so the false write completes command `0x8f`, sets AC=`0x0f`, sets busy, and each later poll refreshes busy forever;
+- E2 is exposed to the same ordering.
 
-The current bridge in `src/mame/skeleton/alphasma3k.cpp` publishes Port C callbacks immediately, one line at a time.
+Temporary instrumentation from the proof task was fully reverted. Do not re-prove the hypothesis.
 
-The MC68EZ328 core calls `out_port_c` callbacks from bit 0 through bit 7 inside `pcdata_w()`.
+## Goal
 
-For Port C bits configured as input, `pcdata_w()` publishes logical 1 on the output callback.
+Implement a **driver-local atomic Port C bridge** in:
 
-Therefore, during `LCD_ReadByte`, PC0-PC3 can make the bridge's `m_lcd_data` become `0x0f` while the firmware is reading.
+`src/mame/skeleton/alphasma3k.cpp`
 
-The firmware's final read-strobe cleanup writes a single new PCDATA value that drops both R/W and E. Since callbacks are delivered in bit order, PC4/RW is processed before PC6/E1 or PC7/E2.
+without modifying the MC68EZ328 core or HD44780/KS0066 core.
 
-Relevant MAME 0.289 `hd44780_base_device::e_w()` behavior is already known:
+Then validate:
 
-```cpp
-if (!state && m_enabled && m_rw_input == 0)
-{
-    switch (m_rs_input)
-    {
-        case 0: control_write(m_db_input); break;
-        case 1: data_write(m_db_input);    break;
-    }
-}
-```
+1. the existing no-LCD diagnostic behavior is unchanged;
+2. `asma3kdvl` completes `LCDInitializeModule` with both KS0066 devices present;
+3. the repeated false `0x8f` busy loop disappears.
 
-In 4-bit control read, `control_read()` returns busy/address high nibble first and AC low nibble second. A repeated read value `0x8f` is therefore consistent with busy=1 and AC=0x0f.
+Do not implement display rendering in this task.
 
-## Hypothesis to test
+---
 
-The bridge is violating the atomic nature of the original PCDATA byte write:
+## A. Pre-edit inspection
 
-1. the firmware finishes the second LCD read with E=1 and R/W=1;
-2. it writes PCDATA=0;
-3. callbacks PC0-PC3 arrive first and leave `m_lcd_data=0x0f`;
-4. callback PC4 changes R/W from 1 to 0 while E is still logically high in the bridge/device;
-5. callback PC6 or PC7 then drops E;
-6. `hd44780_base_device::e_w(0)` sees R/W=0 and treats this falling edge as a **write**, using DB=`0xf0`;
-7. in 4-bit mode this spurious nibble completes/reissues a command such as `0x8f`, setting AC=0x0f and busy again;
-8. each subsequent busy poll repeats the same false write, so busy can never expire.
+From:
 
-This is a hypothesis. **Do not fix the bridge until this stage proves or rejects it.**
+`~/Projects/alphasmart-as3k/mame0289`
 
-## A. Inspect existing evidence first
+1. `git pull --ff-only as3k-project as3k-mame0289-dev`.
+2. Confirm branch and clean tracked status.
+3. Read current:
+   - `src/mame/skeleton/alphasma3k.cpp`;
+   - `src/devices/machine/mc68328.cpp` Port C implementation;
+   - relevant `src/devices/video/hd44780.cpp` `db_w/rw_w/rs_w/e_w` behavior.
+4. Reconfirm from the exact core source that `pcdata_w()` invokes selected output callbacks in deterministic bit order 0→7.
+5. Reconfirm from the linked AlphaWord LCD initialization that the relevant LCD accesses use `PCSEL=0xff` and PC7 is an output during PCDATA writes, so the PC7 callback is a valid end-of-byte commit point for this bridge.
 
-From `~/Projects/alphasmart-as3k/mame0289`:
+If either point 4 or 5 is false in the actual source/runtime, stop and report rather than implementing the design below.
 
-1. Verify branch/status and pull the current handoff safely.
-2. Read the existing local logs if present:
-   - `../diagnostic/as3kdvl_lcd_controller.log`
-   - `../diagnostic/as3kdvl_lcd_controller_console.log`
-3. Locate the **first** transition from normal `LCD_ReadByte=0x00` to stuck `LCD_ReadByte=0x8f`.
-4. Extract enough preceding markers to identify:
-   - which `LCD_WriteByte` invocation caused the busy period;
-   - whether it is inside `LCD_Reset`, `LCDMoveCursor`, or another known caller;
-   - E1 vs E2;
-   - the immediately preceding PCDATA write/read sequence.
-5. If necessary, correlate statically with `LCDModule.c` and the linked disassembly. Do not modify source for this part.
+---
 
-Report the first stuck operation precisely before instrumenting anything.
+## B. Implement an atomic bridge in `alphasma3k_state`
 
-## B. Temporary diagnostic instrumentation only
+### Required semantics
 
-Temporarily instrument **only** `src/mame/skeleton/alphasma3k.cpp`.
+A single MC68EZ328 PCDATA byte write must be presented to the external LCDs as one logical transition, not eight externally visible transitions.
 
-Do not modify:
+A clean implementation is expected to keep two compact states, for example:
+
+- pending Port C output state assembled from callbacks;
+- last applied/committed LCD Port C state.
+
+Exact names are up to you, but keep the implementation minimal and MAME-style.
+
+### Callback collection
+
+For `out_port_c<0..7>()`:
+
+- each callback updates only its bit in the pending Port C state;
+- PC0..PC6 must **not** directly call `db_w`, `rw_w`, `rs_w`, or `e_w` anymore;
+- after updating PC7, commit the assembled byte to the LCD bridge, because the core has now delivered the complete 0→7 callback burst for that PCDATA write.
+
+Document briefly in source why PC7 is the commit point: the current MC68EZ328 core iterates bit 0→7 and AlphaWord selects all Port C bits for the LCD path.
+
+Do not add a scheduler/timer workaround that might coalesce multiple CPU writes together.
+
+### Atomic commit ordering
+
+Let OLD be the previously applied Port C state and NEW the just-assembled pending state.
+
+Derive:
+
+- DB nibble = bits 0..3;
+- RW = bit 4;
+- RS = bit 5;
+- E1 = bit 6;
+- E2 = bit 7.
+
+Apply one transition in this order:
+
+1. **Falling enable edges first, using OLD bus/control state.**
+   - If OLD.E1=1 and NEW.E1=0, call `ks0066_0->e_w(0)` before changing DB/RW/RS.
+   - If OLD.E2=1 and NEW.E2=0, call `ks0066_1->e_w(0)` before changing DB/RW/RS.
+
+   This is the critical fix: a read cleanup must let E fall while the KS0066 still sees OLD.RW=1, so it remains a read and cannot become a false write.
+
+2. **Apply NEW shared bus/control state.**
+   - `db_w(NEW_DB << 4)` to both existing LCD devices;
+   - `rw_w(NEW_RW)` to both;
+   - `rs_w(NEW_RS)` to both.
+
+3. **Rising enable edges last, using NEW bus/control state.**
+   - If OLD.E1=0 and NEW.E1=1, call `ks0066_0->e_w(1)` after NEW DB/RW/RS are present.
+   - Same for E2.
+
+4. Record NEW as the applied state.
+
+This ordering models simultaneous GPIO transition semantics needed by the LCD protocol:
+
+- falling E samples the pre-transition read/write state;
+- rising E sees the post-transition bus/control state.
+
+Do not change KS0066 semantics.
+
+### Reads
+
+Update `lcd_data_r()` to multiplex using the **applied/committed** E1/E2 state, not a partially assembled pending state.
+
+Preserve the already validated behavior:
+
+- both LCD devices absent -> nibble `0x0`;
+- E1 only -> `ks0066_0->db_r() >> 4`;
+- E2 only -> `ks0066_1->db_r() >> 4`;
+- neither -> `0x0f`;
+- both -> deterministic `0x0f` plus existing contention diagnostic.
+
+All handlers must still tolerate missing optional LCD devices.
+
+### State/save/reset
+
+- Save the new pending/applied Port C state with `save_item()`.
+- Reset both to zero.
+- Remove obsolete per-line bridge state if it is no longer needed; do not leave two competing representations.
+- Keep source changes limited to `alphasma3k.cpp` unless `mame.lst` needs no semantic change.
+
+Do not touch:
 
 - `src/devices/machine/mc68328.cpp/.h`;
 - `src/devices/video/hd44780.cpp/.h`;
-- ROM definitions or hashes;
-- the semantic behavior of the bridge.
+- ROM hashes;
+- synthetic fixture contents;
+- display rendering.
 
-Add minimal `logerror` diagnostics sufficient to establish ordering. Do not add a permanent fix.
+---
 
-At minimum capture:
+## C. Static checks and build
 
-1. In `lcd_data_w`:
-   - when DB4-DB7 change while E1 or E2 is currently asserted;
-   - old/new nibble;
-   - which bit callback caused it;
-   - current RW/RS/E1/E2.
+1. `git diff --check`.
+2. Inspect and explain the complete `alphasma3k.cpp` diff before build.
+3. Incremental build only, no clean:
 
-2. In `lcd_rw_w`:
-   - old RW -> new RW;
-   - current nibble;
-   - RS/E1/E2;
-   - especially a marker if RW drops 1->0 while E1 or E2 is still high.
+```sh
+make SUBTARGET=alphasma3k \
+  SOURCES=src/mame/skeleton/alphasma3k.cpp \
+  OSD=sdl \
+  REGENIE=1 \
+  -j2
+```
 
-3. In `lcd_e1_w` / `lcd_e2_w`, immediately **before** calling `ks0066->e_w(state)`:
-   - old E -> new E;
-   - current bridge nibble;
-   - current RW and RS.
+Save output to:
 
-Use a distinctive prefix such as:
+`../diagnostic/rebuild_lcd_atomic_bridge.log`
 
-`AS3KBRIDGE_`
+Expect 4 drivers and a successful link.
 
-Keep logging narrow. We do not need another multi-hundred-thousand-line busy-loop log.
+4. Confirm `asma3kdi` and `asma3kdv` still audit good:
 
-## C. Narrow execution
+```sh
+./alphasma3k asma3kdi -verifyroms
+./alphasma3k asma3kdv -verifyroms
+```
 
-Rebuild incrementally, no clean.
+Do not use `asma3kdvl -verifyroms` as a success gate because its synthetic F05 checksum is deliberately wrong.
 
-Create a new debugger script, for example:
+---
 
-`../diagnostic/as3kdvl_bridge_order.cmd`
+## D. Exact no-LCD regression
 
-The run should stop as soon as the first stuck busy read (`byte & 0x80 != 0`) has been captured with the surrounding bridge log events.
+Run the already validated no-LCD diagnostic unchanged:
 
-Use locally verified debugger condition syntax; do not guess it. If a reliable conditional breakpoint cannot be expressed, stop after the first occurrence by another verified debugger mechanism or use a very short controlled run that captures only the first transition.
+```sh
+./alphasma3k asma3kdv \
+  -debug \
+  -debugscript ../diagnostic/as3kdv_lcd_nolcd.cmd \
+  -log \
+  -seconds_to_run 8
+```
 
-Run only `asma3kdvl`.
+Save the new result separately, e.g.:
 
-Preserve:
+`../diagnostic/as3kdv_lcd_atomic_bridge_nolcd_regression.log`
 
-- console output;
-- `error.log`/bridge diagnostics;
-- the relevant AS3KDVL debugger markers.
+Required regression behavior remains:
 
-## D. Required proof
+- LCD_RESET_ENTRY = 2;
+- WRITEBYTE_ENTRY = 11;
+- READBYTE_ENTRY = 11;
+- PCDATA_READ = 22;
+- BUSY_BRANCH = 11;
+- E1 PCDATA = `0x50`, reconstructed byte `0x00`;
+- E2 PCDATA = `0x90`, reconstructed byte `0x00`;
+- busy always 0;
+- branch exits to `0x00430e40`;
+- final breakpoint on RTS `0x0043079e` reached.
 
-The hypothesis is considered **confirmed** only if the trace shows this order for the final read cleanup on the affected controller:
+If this regression changes, stop. Do not continue to the KS0066 test and do not improvise a second fix.
 
-1. E is still high and RW was 1;
-2. DB nibble becomes `0x0f` (or otherwise the exact value later passed to KS0066);
-3. RW callback changes the device/bridge to 0 **before** the E falling callback;
-4. the E falling callback is then invoked with RW=0, RS as observed, DB nibble as observed;
-5. static `hd44780_base_device::e_w()` semantics imply that this exact falling edge calls `control_write()` or `data_write()`;
-6. the next busy read becomes/repeats `0x8f` with AC low nibble `0xf`.
+---
 
-If any step differs, reject or refine the hypothesis from evidence. Do not force the conclusion.
+## E. KS0066 controller test after the fix
 
-Also determine whether the same ordering exists on E2 even though E2 did not become stuck in the previous run.
+1. Confirm the local-only synthetic file still exists:
 
-## E. Clean up temporary instrumentation
+`roms/asma3kdvl/ks0066_f05.bin`
 
-After capturing the evidence:
+It must still be exactly 4096 zero bytes with:
 
-1. Revert **all temporary AS3KBRIDGE logging changes** from `alphasma3k.cpp`.
-2. Do not revert the already-validated permanent AS3K source/bridge/diagnostic systems.
-3. `git diff --check` must pass.
-4. The tracked source should return to exactly the published semantic state before this diagnostic.
+- CRC32 `c71c0011`;
+- SHA1 `1ceaf73df40e531df3bfb26b4fb7cd95fb7bff1d`;
+- SHA256 `ad7facb2586fc6e966c004d7d1d16b024f5805ff7cb47c7a85dabd8b48892ca7`.
 
-Do not compile a fix in this task.
+If missing, regenerate only this synthetic file locally. Never commit it.
 
-## F. Result and publication
+2. Run the existing controller script:
 
-Replace `docs/as3k/CODEX_RESULT.md` with a factual report containing:
+```sh
+./alphasma3k asma3kdvl \
+  -debug \
+  -debugscript ../diagnostic/as3kdvl_lcd_controller.cmd \
+  -log \
+  -seconds_to_run 8
+```
 
-- first operation that becomes stuck;
-- exact PCDATA/DB/RW/RS/E callback sequence around the failure;
-- whether DB became `0x0f` while E was high;
-- whether RW changed 1->0 before E fell;
-- exact state seen by `e_w(0)`;
-- whether `hd44780_base_device::e_w()` therefore performs an unintended write;
-- whether that write can be reconstructed as the command/data that yields AC=0x0f / readback `0x8f`;
-- whether the hypothesis is confirmed, rejected, or only partially confirmed;
-- whether E2 shows the same ordering;
-- paths of the temporary diagnostic logs/scripts;
-- confirmation that temporary source instrumentation was reverted;
+Preserve console and `error.log` under new filenames, for example:
+
+- `../diagnostic/as3kdvl_lcd_atomic_bridge_console.log`
+- `../diagnostic/as3kdvl_lcd_atomic_bridge.log`
+
+3. Confirm loader behavior remains only the expected `WRONG CHECKSUMS` warnings for synthetic F05, with no required-file failure.
+
+4. Report:
+
+- LCD_RESET_ENTRY count;
+- WRITEBYTE_ENTRY count;
+- READBYTE_ENTRY count;
+- PCDATA_READ count;
+- BUSY_BRANCH count;
+- distinct E1/TOP PCDATA values;
+- distinct E2/BOTTOM PCDATA values;
+- every distinct reconstructed `LCD_ReadByte` value;
+- whether any read has busy bit 1;
+- how many BUSY_BRANCH events loop to `0x00430e28` and how many exit to `0x00430e40`;
+- whether `0x8f` appears at all;
+- whether any busy condition eventually clears rather than being refreshed indefinitely;
+- whether there is E1/E2 contention;
+- whether both LCD_Reset calls finish;
+- whether `LCDMoveCursor` finishes;
+- whether final breakpoint `0x0043079e` is reached before timeout.
+
+### Success criterion
+
+The fix is successful if:
+
+- no-LCD regression is unchanged;
+- the repeated false `0x8f` loop is gone;
+- no contention occurs;
+- `asma3kdvl` reaches the RTS at `0x0043079e` before timeout.
+
+Normal finite busy polling is acceptable and desirable evidence that the real KS0066 busy timer is being observed.
+
+If `asma3kdvl` still hangs, stop at the first new failure and report it without speculative additional changes.
+
+---
+
+## F. Commit and publish
+
+If both regression and KS0066 test pass:
+
+1. `git diff --check`.
+2. `git status --short`.
+3. Ensure nothing under `roms/`, diagnostics, generated binaries, or proprietary historical artifacts is staged.
+4. Replace `docs/as3k/CODEX_RESULT.md` with a factual report.
+5. Commit only safe tracked changes.
+6. Push only to `as3k-project/as3k-mame0289-dev`.
+
+The result report must include:
+
+- exact state representation chosen;
+- exact commit ordering for falling edges / controls / rising edges;
+- why PC7 is a safe commit point in this firmware/core path;
+- build result;
+- no-LCD regression result;
+- KS0066 test counts and distinct read values;
+- whether busy=1 was observed and whether it cleared;
+- whether `0x8f` disappeared;
+- final RTS result;
+- contention result;
 - `git diff --check`;
-- final `git status --short`;
-- commit SHA and push result.
-
-Commit/push only safe tracked handoff/result files if source has returned to the validated state. Never add `roms/`, generated ROMs, proprietary binaries, or diagnostic logs.
-
-Push only to `as3k-mame0289-dev`.
+- final status;
+- commit SHA;
+- push result.
 
 ## Stop condition
 
-Stop after proving or rejecting the atomicity hypothesis.
+Stop after validating the atomic bridge fix through `LCDInitializeModule`.
 
-**Do not implement the bridge fix in this task.**
+Do **not** implement 40×4 rendering, opening screen, keyboard, or later modules in this task.
