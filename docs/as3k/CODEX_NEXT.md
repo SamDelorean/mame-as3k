@@ -1,230 +1,277 @@
-# Current Codex task — study the AS3K dual-controller 40×4 rendering path
+# Current Codex task — implement the AS3K 40×4 composite LCD screen
 
 Date: 2026-08-26
 
 Read `AGENTS.md` and the current `docs/as3k/CODEX_RESULT.md` first.
 
-## Established state
+## Established evidence
 
-The GPIO↔KS0066 protocol is now validated through `LCDInitializeModule`.
+The previous static study is complete and published. Treat these points as established for this task:
 
-The current atomic bridge in `src/mame/skeleton/alphasma3k.cpp` is known-good for this stage:
+- E1 / `ks0066_0` drives physical rows 1–2.
+- E2 / `ks0066_1` drives physical rows 3–4.
+- Within each controller, line 0 is DDRAM base `0x00`; line 1 is DDRAM base `0x40`.
+- AlphaWord configures the LCD controllers for two-line mode.
+- Each controller therefore provides two meaningful 40-character rows.
+- `hd44780_base_device::render()` returns 80 character slots in this mode, with 16 bytes reserved per character; bytes 0–7 contain the 5×8 glyph rows and bits 4..0 are the five pixels.
+- Final physical geometry is 40×4 character cells, each 6×9 pixels: **240×36 pixels**.
+- The current atomic GPIO↔KS0066 bridge is validated and must remain semantically unchanged.
+- The existing `set_lcd_size(4,40)` on each controller is visually incorrect and should become `set_lcd_size(2,40)`.
 
-- no-LCD regression passes unchanged;
-- `asma3kdvl` with two KS0066 devices completes both `LCD_Reset` calls and `LCDMoveCursor`;
-- one real finite busy=1 poll (`0x80`) was observed and cleared;
-- the false `0x8f` loop is gone;
-- final RTS `0x0043079e` is reached.
-
-Do **not** modify that bridge in this task.
+This task implements only the display infrastructure. Do **not** yet create the patterned CGROM or visual-test firmware/fixture.
 
 ## Goal
 
-Perform an **evidence-first static study** of how to render the physical AlphaSmart 3000 40×4 LCD from the two independent KS0066 devices.
+Add a real composite LCD screen to `src/mame/skeleton/alphasma3k.cpp`, preserving all validated protocol behavior.
 
-This task is design/research only.
+At the end we must have:
 
-**Do not modify source code.**
-**Do not rebuild.**
-**Do not run an emulated AS3K system.**
-**Do not generate or download any real CGROM.**
+1. one 240×36 `SCREEN_TYPE_LCD` owned by the AS3K driver;
+2. rows 1–2 drawn from `ks0066_0->render()`;
+3. rows 3–4 drawn from `ks0066_1->render()`;
+4. both KS0066 configured visually as 2×40;
+5. existing no-LCD diagnostics still working when the optional KS0066 devices are removed;
+6. `asma3kdvl` still completing `LCDInitializeModule` with finite real busy polling and no `0x8f` loop.
 
-The output must be precise enough that the following task can implement the display without guessing row mapping or geometry.
-
----
-
-## A. Verify the physical/firmware row mapping
-
-Locate the original AlphaSmart LCD source/listings already available locally, especially `LCDModule.c`, `LCDModule.h`, linked listing/disassembly, or equivalent archived AS3000 material.
-
-Determine exactly how logical cursor rows 1–4 map to:
-
-- E1 / `ks0066_0` (TOP);
-- E2 / `ks0066_1` (BOTTOM);
-- DDRAM line/address inside that controller.
-
-Inspect at minimum:
-
-- `LCDMoveCursor`;
-- any row/address tables or switch statements;
-- constants for TOP/BOTTOM display selection;
-- the command byte used for each physical row.
-
-Report a table conceptually equivalent to:
-
-`physical row -> controller -> controller logical line -> DDRAM base address`
-
-but fill it only from evidence.
-
-Do not assume the conventional 40×4 mapping unless the AlphaSmart source confirms it.
-
-Also determine whether the firmware meaning of TOP/BOTTOM is:
-
-- rows 1–2 vs rows 3–4,
-- alternating rows,
-- or another arrangement.
+Do not proceed to later AlphaWord modules, keyboard, or opening-screen execution.
 
 ---
 
-## B. Inspect MAME 0.289 HD44780/KS0066 rendering semantics
+## A. Pre-edit gate
 
-Inspect:
+From `~/Projects/alphasmart-as3k/mame0289`:
 
-- `src/devices/video/hd44780.h`
-- `src/devices/video/hd44780.cpp`
+1. `git pull --ff-only as3k-project as3k-mame0289-dev`.
+2. Confirm branch is `as3k-mame0289-dev` and tracked status is clean.
+3. Read the current:
+   - `src/mame/skeleton/alphasma3k.cpp`;
+   - `src/mame/skeleton/alphasma.cpp` rendering/palette/configuration;
+   - relevant `hd44780.cpp/.h` `render()` semantics if needed.
+4. Confirm the current atomic bridge code is exactly the validated implementation from commit `0b414444` or its unchanged descendant.
 
-Answer precisely:
+If the bridge has changed unexpectedly, stop and report before editing.
 
-1. What does `set_lcd_size(lines, chars)` affect?
-2. What does it **not** affect?
-3. How does `render()` lay out its `m_render_buf`?
-4. What is `line_size` after AlphaWord has sent Function Set for 2-line mode?
-5. How many character positions from each KS0066 are meaningful for one AS3K controller?
-6. How are 5×8 glyph rows stored in the returned render buffer?
-7. How are cursor/blink effects already folded into `render()`?
-8. Does calling `render()` from an owner driver's `screen_update` have side effects relevant to emulation state?
+---
 
-Explicitly evaluate the current AS3K configuration:
+## B. Implement the composite renderer only in `alphasma3k.cpp`
+
+### 1. Remove unused temporary bitmap state
+
+The current `m_tmp_bitmap` member in `alphasmart3k_state` is unused. Remove it if it is still present. Do not introduce a replacement temporary bitmap.
+
+### 2. Add palette function
+
+Add a driver palette initializer in MAME style, using the existing AlphaSmart palette provisionally:
+
+- pen 0 / LCD background: `rgb_t(138, 146, 148)`
+- pen 1 / active pixel: `rgb_t(92, 83, 88)`
+
+Document briefly that these colors are reused provisionally from `alphasma.cpp`, not claimed as a measured AS3K color calibration.
+
+### 3. Add driver-owned `screen_update`
+
+Add a `uint32_t screen_update(screen_device &, bitmap_ind16 &, const rectangle &cliprect)` member.
+
+Required behavior:
+
+- fill `cliprect` with palette pen 0 first;
+- tolerate either/both optional KS0066 devices being absent;
+- call `render()` only on a device that exists;
+- compose the physical rows exactly:
+  - physical row 0 <- `ks0066_0`, controller line 0
+  - physical row 1 <- `ks0066_0`, controller line 1
+  - physical row 2 <- `ks0066_1`, controller line 0
+  - physical row 3 <- `ks0066_1`, controller line 1
+- for each physical row `r=0..3`, column `c=0..39`, glyph row `gy=0..7`, glyph pixel `gx=0..4`:
+  - source character offset = `16 * (controller_line * 40 + c)`;
+  - source byte = `render_buffer[offset + gy]`;
+  - screen position = `(x = c*6 + gx, y = r*9 + gy)`;
+  - active pixel is `BIT(source_byte, 4-gx)`;
+- leave cell column `x=5` and cell row `y=8` as background spacing by virtue of the initial fill;
+- respect `cliprect` when writing pixels;
+- return `0`.
+
+Do not alter DDRAM, CGRAM, AC, busy state, cursor state, or bridge state. The renderer must be read-only with respect to emulated LCD protocol state.
+
+Prefer a small local helper/lambda for drawing one controller line if it improves clarity, but keep the implementation simple and MAME-style.
+
+### 4. Correct controller visual geometry
+
+Change both:
 
 ```cpp
-m_lcdc0->set_lcd_size(4, 40);
-m_lcdc1->set_lcd_size(4, 40);
+set_lcd_size(4, 40)
 ```
 
-Determine whether `4,40` is semantically correct for two independent controllers or only a provisional visual setting.
+to:
 
-If each physical KS0066 should instead be treated visually as `2,40`, explain why from MAME code and the AS3K hardware/firmware mapping.
+```cpp
+set_lcd_size(2, 40)
+```
 
-Do not change it yet.
+Do not change clock, BIOS selection, hashes, or device type.
 
----
+### 5. Add screen and palette devices
 
-## C. Study real MAME rendering examples
+In `alphasmart3k(machine_config &config)`, add one LCD screen with:
 
-Inspect at least these if present in MAME 0.289:
+- `SCREEN_TYPE_LCD`;
+- logical size `240 × 36` (`6*40`, `9*4` is fine);
+- full visible area;
+- driver `screen_update` callback;
+- palette bound to the new two-entry palette;
+- refresh/vblank values consistent with `alphasma.cpp` unless the exact MAME 0.289 API requires equivalent syntax. Use 50 Hz and the same provisional vblank if directly reusable.
 
-- `src/mame/skeleton/alphasma.cpp`
-- `src/mame/omron/luna_88k.cpp`
+Add a two-entry `PALETTE` using the driver palette initializer.
 
-and one additional useful HD44780/KS0066 screen example if needed.
+The derived `alphasmart3k_diag` configuration removes only the two KS0066 devices. The screen/palette may remain; the renderer must then produce a blank background without crashing. Do not remove the screen from diagnostic configs unless there is a proven MAME configuration reason to do so.
 
-For `alphasma.cpp`, locate the exact:
+### 6. Do not touch
 
-- palette setup;
-- `screen_update` implementation;
-- temporary bitmap usage, if any;
-- LCD screen dimensions and visible area;
-- way its two KS0066 devices are combined.
+Do not modify:
 
-Determine whether that implementation can be reused directly for AS3K or whether its older hardware/controller wiring makes only the rendering portion reusable.
-
-Report exact source functions and the relevant geometry.
-
----
-
-## D. Derive the minimum AS3K composite-screen design
-
-Without implementing it, specify the smallest clean change that should later live only in `alphasma3k.cpp`.
-
-Prefer a driver-owned composite `screen_update` unless evidence shows a better MAME-native approach.
-
-Determine:
-
-- final logical character geometry: 40 columns × 4 physical rows;
-- pixel cell size implied by MAME's HD44780 renderer (glyph width/height plus spacing);
-- resulting bitmap width and height;
-- exact source row in `ks0066_0->render()` and `ks0066_1->render()` for each physical display row;
-- pixel placement formula for `(physical_row, column, glyph_y, glyph_x)`;
-- whether one blank column and one blank row should be inserted between character cells;
-- a minimal two-entry LCD palette suitable for MAME style, preferably consistent with `alphasma.cpp` unless AS3K evidence suggests otherwise;
-- whether the existing `m_tmp_bitmap` member in `alphasma3k_state` is useful, unnecessary, or should be removed later.
-
-State exactly which future source additions are expected, e.g.:
-
-- palette function;
-- composite `screen_update`;
-- SCREEN configuration;
-- PALETTE configuration;
-- possible correction from `set_lcd_size(4,40)` to `set_lcd_size(2,40)` per controller.
-
-Do not add any of them in this task.
+- `src/devices/machine/mc68328.cpp/.h`;
+- `src/devices/video/hd44780.cpp/.h`;
+- the atomic Port C bridge semantics;
+- ROM definitions/hashes;
+- `mame.lst` unless no semantic change is required;
+- diagnostic fixture binaries;
+- anything under `roms/`;
+- keyboard, USB, serial, interrupts, later firmware modules.
 
 ---
 
-## E. Design a lawful validation strategy for the next implementation
+## C. Static checks and build
 
-The current local synthetic `ks0066_f05.bin` is 4096 zero bytes. This is adequate for protocol/busy tests but renders all CGROM characters blank.
+1. Run `git diff --check`.
+2. Inspect the complete `alphasma3k.cpp` diff before build and confirm it contains only:
+   - palette/screen renderer;
+   - screen/palette machine configuration;
+   - 2×40 geometry correction;
+   - removal of unused temporary bitmap if applicable.
+3. Incremental build, no clean:
 
-Determine the cleanest **synthetic-only** way to validate the future screen composition without any proprietary CGROM.
+```sh
+make SUBTARGET=alphasma3k \
+  SOURCES=src/mame/skeleton/alphasma3k.cpp \
+  OSD=sdl \
+  REGENIE=1 \
+  -j2
+```
 
-Evaluate at least these possibilities:
+Save output to:
 
-1. keep zero CGROM and validate only screen creation/dimensions initially;
-2. generate a deterministic synthetic 4096-byte diagnostic CGROM locally with visible non-copyrightable test patterns;
-3. use CGRAM through normal firmware/device commands;
-4. temporarily seed distinct DDRAM values in a diagnostic-only mechanism;
-5. continue AlphaWord far enough that normal firmware writes visible DDRAM, while using a synthetic patterned CGROM.
+`../diagnostic/rebuild_lcd_composite_screen.log`
 
-Choose the least invasive strategy that can prove:
+Expect 1 source, 4 drivers, successful link.
 
-- all four physical rows render;
-- E1 rows and E2 rows are placed in the correct physical order;
-- 40 columns fit exactly;
-- controller state remains independent;
-- no protocol behavior is altered merely to make pixels visible.
+4. Confirm:
 
-No proprietary ROM/CGROM may be added to Git or generated from copyrighted data.
+```sh
+./alphasma3k asma3kdi -verifyroms
+./alphasma3k asma3kdv -verifyroms
+```
 
-If a synthetic patterned CGROM is recommended, define a simple reproducible pattern-generation rule and explain what it would allow us to observe. Do not generate the file yet.
+remain good.
 
----
-
-## F. Check whether rendering can be implemented before later firmware modules
-
-We currently stop at `LCDInitializeModule` RTS before `SystemInstallExceptionVectors` and keyboard initialization.
-
-Determine whether a composite screen can be safely added now even though the screen will initially be blank, or whether there is a technical dependency on later modules.
-
-Separate clearly:
-
-- display-device rendering infrastructure;
-- firmware actually writing meaningful screen contents.
-
-The expected answer should tell us whether the next implementation can add the 40×4 display **without** yet emulating keyboard or later modules.
+5. Use `-listxml` (or another non-emulating metadata command if MAME syntax differs) to confirm `asma3kdvl` exposes exactly one LCD display with width 240 and height 36. Record the exact display metadata/refresh value. Do not use `asma3kdvl -verifyroms` as a success criterion because its synthetic F05 intentionally has the wrong checksum.
 
 ---
 
-## G. Repository state and publication
+## D. No-LCD regression
 
-This is a no-source-change task.
+Run the established no-LCD diagnostic unchanged:
 
-At the end:
+```sh
+./alphasma3k asma3kdv \
+  -debug \
+  -debugscript ../diagnostic/as3kdv_lcd_nolcd.cmd \
+  -log \
+  -seconds_to_run 8
+```
 
-1. `git diff --check`
-2. `git status --short`
-3. confirm no source file changed;
-4. replace `docs/as3k/CODEX_RESULT.md` with the factual study;
-5. commit only that safe documentation result;
-6. push only to `as3k-project/as3k-mame0289-dev`.
+Save the result separately as, for example:
 
-The result report must include:
+`../diagnostic/as3kdv_lcd_composite_nolcd_regression.log`
 
-- evidence-backed physical row/controller/DDRAM mapping;
-- exact `render()` buffer layout;
-- meaning of `set_lcd_size` and whether current `4,40` should become `2,40`;
-- relevant MAME examples and geometry;
-- proposed final screen dimensions;
-- exact per-row composition plan;
-- palette plan;
-- fate of `m_tmp_bitmap`;
-- recommended synthetic-only visual validation method;
-- whether rendering can be implemented independently of keyboard/later firmware;
-- expected minimum future driver changes;
-- `git diff --check` and final Git status;
-- commit SHA and push result.
+Required behavior:
+
+- both LCD resets reached;
+- 11 WriteByte / 11 ReadByte / 22 PCDATA reads / 11 busy branches as before;
+- reconstructed reads remain `0x00`;
+- all busy branches exit rather than loop;
+- final breakpoint at `0x0043079e` reached;
+- no crash or screen-update error despite the two LCD devices being absent.
+
+If this regression changes, stop and report. Do not attempt a second fix.
+
+---
+
+## E. KS0066 protocol regression with screen present
+
+Use the existing local-only zero CGROM:
+
+`roms/asma3kdvl/ks0066_f05.bin`
+
+It must remain exactly 4096 zero bytes with the previously recorded hashes. Regenerate only if missing; never stage it.
+
+Run the existing controller script:
+
+```sh
+./alphasma3k asma3kdvl \
+  -debug \
+  -debugscript ../diagnostic/as3kdvl_lcd_controller.cmd \
+  -log \
+  -seconds_to_run 8
+```
+
+Preserve under new names, e.g.:
+
+- `../diagnostic/as3kdvl_lcd_composite_console.log`
+- `../diagnostic/as3kdvl_lcd_composite.log`
+
+Success criteria:
+
+- only expected synthetic F05 WRONG CHECKSUMS warnings;
+- no required-file failure;
+- finite busy polling is acceptable and desirable;
+- any busy=1 condition must clear;
+- `0x8f` must not reappear;
+- no E1/E2 contention;
+- both `LCD_Reset` calls and `LCDMoveCursor` complete;
+- final `0x0043079e` breakpoint reached before timeout;
+- no screen/palette/rendering error or crash.
+
+Report counts and distinct `LCD_ReadByte` values, but do not require them to be byte-for-byte identical if screen scheduling slightly changes finite busy timing. Explain any difference.
+
+Do not continue beyond the LCD RTS.
+
+---
+
+## F. Publication
+
+If all gates pass:
+
+1. `git diff --check`.
+2. `git status --short`.
+3. Ensure no ROM, diagnostic log, screenshot, generated binary, or proprietary artifact is staged.
+4. Replace `docs/as3k/CODEX_RESULT.md` with a factual report containing:
+   - exact renderer implementation and row map;
+   - pixel/cell geometry;
+   - palette values and provisional status;
+   - confirmation both KS0066 are now 2×40;
+   - exact screen metadata from `-listxml`;
+   - build result;
+   - no-LCD regression result;
+   - KS0066 protocol regression result;
+   - confirmation atomic bridge semantics were not changed;
+   - `git diff --check` and final status;
+   - commit SHA and push result.
+5. Commit only safe tracked source/docs changes.
+6. Push only to `as3k-project/as3k-mame0289-dev`.
 
 ## Stop condition
 
-Stop after the rendering design is fully evidenced and documented.
+Stop after the **240×36 composite screen infrastructure is implemented and regression-tested**.
 
-**Do not implement rendering yet.**
+Do **not** yet generate the patterned synthetic CGROM, create the four-row visual test fixture, take visual screenshots, continue to the AlphaWord opening screen, or implement keyboard/later modules.
