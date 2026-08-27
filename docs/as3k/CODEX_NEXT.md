@@ -1,122 +1,189 @@
-# Current Codex task — recover local result, publish it, then continue if needed
+# Current Codex task — prove or reject the LCD Port C atomicity hypothesis
 
 Date: 2026-08-26
 
 Read `AGENTS.md` first and obey it.
 
-## Situation
+## Context already established
 
-The previous Codex session reportedly finished locally, but GitHub still shows this branch at the pre-task handoff commit and `docs/as3k/CODEX_RESULT.md` still says `waiting for local Codex bootstrap`.
+The previous `asma3kdvl` experiment is published in `docs/as3k/CODEX_RESULT.md` and must **not** be repeated blindly.
 
-Therefore **do not blindly rerun the experiment first**. Recover the local state and publish the factual result if it already exists.
+Key observed result:
 
-Remote repository:
-`https://github.com/SamDelorean/mame-as3k.git`
+- both `LCD_Reset` calls completed;
+- 9 busy polls exited normally with reconstructed byte `0x00`;
+- a later E1/TOP operation became stuck reading `0x8f`;
+- high nibble `0x8`, low nibble `0xf`;
+- busy remained set and the loop returned to `0x00430e28` hundreds of thousands of times;
+- no E1/E2 contention occurred.
 
-Required branch:
-`as3k-mame0289-dev`
+The current bridge in `src/mame/skeleton/alphasma3k.cpp` publishes Port C callbacks immediately, one line at a time.
 
-Exact MAME base:
-`f34f02505e32c1993c6a782b6814232cbfc74e36`
+The MC68EZ328 core calls `out_port_c` callbacks from bit 0 through bit 7 inside `pcdata_w()`.
 
-## A. Recover the local worktree safely
+For Port C bits configured as input, `pcdata_w()` publishes logical 1 on the output callback.
 
-From `~/Projects/alphasmart-as3k/mame0289` inspect:
+Therefore, during `LCD_ReadByte`, PC0-PC3 can make the bridge's `m_lcd_data` become `0x0f` while the firmware is reading.
 
-- `pwd`
-- `git status --short`
-- `git branch --show-current`
-- `git rev-parse HEAD`
-- `git log --oneline --decorate -8`
-- `git remote -v`
-- `git diff --check`
+The firmware's final read-strobe cleanup writes a single new PCDATA value that drops both R/W and E. Since callbacks are delivered in bit order, PC4/RW is processed before PC6/E1 or PC7/E2.
 
-Do not use `reset --hard`, do not discard any local diff, do not push to `master`, and do not add anything from `roms/` or any proprietary firmware/dumps.
+Relevant MAME 0.289 `hd44780_base_device::e_w()` behavior is already known:
 
-Determine whether the previous session already:
+```cpp
+if (!state && m_enabled && m_rw_input == 0)
+{
+    switch (m_rs_input)
+    {
+        case 0: control_write(m_db_input); break;
+        case 1: data_write(m_db_input);    break;
+    }
+}
+```
 
-- created `scripts/as3k/codex-next.sh`;
-- added `asma3kdvl`;
-- generated the local synthetic `ks0066_f05.bin`;
-- built the 4-driver subtarget;
-- ran the `asma3kdvl` LCD-controller test;
-- wrote a local `docs/as3k/CODEX_RESULT.md`;
-- created one or more local commits that were never pushed.
+In 4-bit control read, `control_read()` returns busy/address high nibble first and AC low nibble second. A repeated read value `0x8f` is therefore consistent with busy=1 and AC=0x0f.
 
-## B. Reconcile with GitHub without losing local work
+## Hypothesis to test
 
-Ensure a remote points to `SamDelorean/mame-as3k` and fetch `as3k-mame0289-dev`.
+The bridge is violating the atomic nature of the original PCDATA byte write:
 
-If the local branch already contains completed work, preserve it and integrate only the newer remote handoff file(s) as needed. Do not overwrite a completed local `CODEX_RESULT.md` with the remote placeholder.
+1. the firmware finishes the second LCD read with E=1 and R/W=1;
+2. it writes PCDATA=0;
+3. callbacks PC0-PC3 arrive first and leave `m_lcd_data=0x0f`;
+4. callback PC4 changes R/W from 1 to 0 while E is still logically high in the bridge/device;
+5. callback PC6 or PC7 then drops E;
+6. `hd44780_base_device::e_w(0)` sees R/W=0 and treats this falling edge as a **write**, using DB=`0xf0`;
+7. in 4-bit mode this spurious nibble completes/reissues a command such as `0x8f`, setting AC=0x0f and busy again;
+8. each subsequent busy poll repeats the same false write, so busy can never expire.
 
-If the local work is committed but not pushed, inspect the commit contents before pushing.
+This is a hypothesis. **Do not fix the bridge until this stage proves or rejects it.**
 
-If the local work is uncommitted, inspect it carefully before staging.
+## A. Inspect existing evidence first
 
-## C. If the previous experiment already completed
+From `~/Projects/alphasmart-as3k/mame0289`:
 
-Do **not** repeat it unless necessary to obtain missing factual evidence.
+1. Verify branch/status and pull the current handoff safely.
+2. Read the existing local logs if present:
+   - `../diagnostic/as3kdvl_lcd_controller.log`
+   - `../diagnostic/as3kdvl_lcd_controller_console.log`
+3. Locate the **first** transition from normal `LCD_ReadByte=0x00` to stuck `LCD_ReadByte=0x8f`.
+4. Extract enough preceding markers to identify:
+   - which `LCD_WriteByte` invocation caused the busy period;
+   - whether it is inside `LCD_Reset`, `LCDMoveCursor`, or another known caller;
+   - E1 vs E2;
+   - the immediately preceding PCDATA write/read sequence.
+5. If necessary, correlate statically with `LCDModule.c` and the linked disassembly. Do not modify source for this part.
 
-Replace `docs/as3k/CODEX_RESULT.md` with a complete factual report containing at least:
+Report the first stuck operation precisely before instrumenting anything.
 
-- Codex CLI version;
-- whether `codex exec` exists and the exact safe automation syntax found locally;
-- whether `scripts/as3k/codex-next.sh` was created and the exact future command;
-- branch/remote state;
-- whether `asma3kdvl` was added;
-- synthetic CGROM size and hashes;
-- build result and whether 4 drivers were found;
-- whether the AlphaWord fixture was resolved from parent `asma3kdv`;
-- ROM-loader warning/error behavior for the synthetic F05;
-- LCD test counts and distinct PCDATA values;
-- reconstructed LCD_ReadByte values;
-- whether busy=1 was ever observed;
-- BUSY_BRANCH destinations;
-- whether E1/E2 contention occurred;
-- whether both LCD_Reset calls completed;
-- whether breakpoint `0x0043079E` was reached before timeout;
-- `git diff --check` result;
+## B. Temporary diagnostic instrumentation only
+
+Temporarily instrument **only** `src/mame/skeleton/alphasma3k.cpp`.
+
+Do not modify:
+
+- `src/devices/machine/mc68328.cpp/.h`;
+- `src/devices/video/hd44780.cpp/.h`;
+- ROM definitions or hashes;
+- the semantic behavior of the bridge.
+
+Add minimal `logerror` diagnostics sufficient to establish ordering. Do not add a permanent fix.
+
+At minimum capture:
+
+1. In `lcd_data_w`:
+   - when DB4-DB7 change while E1 or E2 is currently asserted;
+   - old/new nibble;
+   - which bit callback caused it;
+   - current RW/RS/E1/E2.
+
+2. In `lcd_rw_w`:
+   - old RW -> new RW;
+   - current nibble;
+   - RS/E1/E2;
+   - especially a marker if RW drops 1->0 while E1 or E2 is still high.
+
+3. In `lcd_e1_w` / `lcd_e2_w`, immediately **before** calling `ks0066->e_w(state)`:
+   - old E -> new E;
+   - current bridge nibble;
+   - current RW and RS.
+
+Use a distinctive prefix such as:
+
+`AS3KBRIDGE_`
+
+Keep logging narrow. We do not need another multi-hundred-thousand-line busy-loop log.
+
+## C. Narrow execution
+
+Rebuild incrementally, no clean.
+
+Create a new debugger script, for example:
+
+`../diagnostic/as3kdvl_bridge_order.cmd`
+
+The run should stop as soon as the first stuck busy read (`byte & 0x80 != 0`) has been captured with the surrounding bridge log events.
+
+Use locally verified debugger condition syntax; do not guess it. If a reliable conditional breakpoint cannot be expressed, stop after the first occurrence by another verified debugger mechanism or use a very short controlled run that captures only the first transition.
+
+Run only `asma3kdvl`.
+
+Preserve:
+
+- console output;
+- `error.log`/bridge diagnostics;
+- the relevant AS3KDVL debugger markers.
+
+## D. Required proof
+
+The hypothesis is considered **confirmed** only if the trace shows this order for the final read cleanup on the affected controller:
+
+1. E is still high and RW was 1;
+2. DB nibble becomes `0x0f` (or otherwise the exact value later passed to KS0066);
+3. RW callback changes the device/bridge to 0 **before** the E falling callback;
+4. the E falling callback is then invoked with RW=0, RS as observed, DB nibble as observed;
+5. static `hd44780_base_device::e_w()` semantics imply that this exact falling edge calls `control_write()` or `data_write()`;
+6. the next busy read becomes/repeats `0x8f` with AC low nibble `0xf`.
+
+If any step differs, reject or refine the hypothesis from evidence. Do not force the conclusion.
+
+Also determine whether the same ordering exists on E2 even though E2 did not become stuck in the previous run.
+
+## E. Clean up temporary instrumentation
+
+After capturing the evidence:
+
+1. Revert **all temporary AS3KBRIDGE logging changes** from `alphasma3k.cpp`.
+2. Do not revert the already-validated permanent AS3K source/bridge/diagnostic systems.
+3. `git diff --check` must pass.
+4. The tracked source should return to exactly the published semantic state before this diagnostic.
+
+Do not compile a fix in this task.
+
+## F. Result and publication
+
+Replace `docs/as3k/CODEX_RESULT.md` with a factual report containing:
+
+- first operation that becomes stuck;
+- exact PCDATA/DB/RW/RS/E callback sequence around the failure;
+- whether DB became `0x0f` while E was high;
+- whether RW changed 1->0 before E fell;
+- exact state seen by `e_w(0)`;
+- whether `hd44780_base_device::e_w()` therefore performs an unintended write;
+- whether that write can be reconstructed as the command/data that yields AC=0x0f / readback `0x8f`;
+- whether the hypothesis is confirmed, rejected, or only partially confirmed;
+- whether E2 shows the same ordering;
+- paths of the temporary diagnostic logs/scripts;
+- confirmation that temporary source instrumentation was reverted;
+- `git diff --check`;
 - final `git status --short`;
 - commit SHA and push result.
 
-Then stage only safe tracked project files. Never stage `roms/`, generated ROM binaries, historical firmware, `AWordApplet02.bin`, `UpdaterROMWithStartup02.bin`, or other proprietary artifacts.
+Commit/push only safe tracked handoff/result files if source has returned to the validated state. Never add `roms/`, generated ROMs, proprietary binaries, or diagnostic logs.
 
-Commit with a clear AS3K message if needed and push only to `as3k-mame0289-dev`.
+Push only to `as3k-mame0289-dev`.
 
-## D. If the previous experiment did NOT actually complete
+## Stop condition
 
-Continue the pending task exactly as originally planned:
+Stop after proving or rejecting the atomicity hypothesis.
 
-1. Add diagnostic system `asma3kdvl` using the same valid AlphaWord fixture as `asma3kdv`, parent `asma3kdv`, machine config `alphasmart3k`.
-2. Add `asma3kdvl` to `src/mame/mame.lst`.
-3. Create local-only `roms/asma3kdvl/ks0066_f05.bin` as 4096 zero bytes and verify:
-   - CRC32 `c71c0011`
-   - SHA1 `1ceaf73df40e531df3bfb26b4fb7cd95fb7bff1d`
-   - SHA256 `ad7facb2586fc6e966c004d7d1d16b024f5805ff7cb47c7a85dabd8b48892ca7`
-4. Do not copy the AlphaWord fixture into the child set initially; confirm it resolves from parent `asma3kdv`.
-5. Incremental build only:
-   `make SUBTARGET=alphasma3k SOURCES=src/mame/skeleton/alphasma3k.cpp OSD=sdl REGENIE=1 -j2`
-6. Verify 4 drivers.
-7. Create `../diagnostic/as3kdvl_lcd_controller.cmd` from the existing no-LCD script with marker prefix `AS3KDVL_`.
-8. Run only:
-   `./alphasma3k asma3kdvl -debug -debugscript ../diagnostic/as3kdvl_lcd_controller.cmd -log -seconds_to_run 8`
-9. Stop without speculative fixes if there is required-file failure, LCD contention, or failure to reach `0x0043079E`.
-10. Write the factual result to `docs/as3k/CODEX_RESULT.md`, commit safe files, and push only to `as3k-mame0289-dev`.
-
-## E. Automation wrapper
-
-If the installed CLI supports safe non-interactive `codex exec`, ensure `scripts/as3k/codex-next.sh` exists and is safe. It must:
-
-- verify branch `as3k-mame0289-dev`;
-- fetch/pull the task handoff safely without discarding local work;
-- read `AGENTS.md` and `docs/as3k/CODEX_NEXT.md`;
-- invoke the locally supported non-interactive Codex syntax;
-- keep normal safeguards/approvals;
-- exit non-zero on failure;
-- print `docs/as3k/CODEX_RESULT.md` and `git status --short` at the end.
-
-Do not recursively run the wrapper from inside this Codex session.
-
-## Finish
-
-The essential deliverable is that GitHub branch `as3k-mame0289-dev` is advanced with the safe source/handoff/result files and that `docs/as3k/CODEX_RESULT.md` contains the actual result rather than the placeholder.
+**Do not implement the bridge fix in this task.**
