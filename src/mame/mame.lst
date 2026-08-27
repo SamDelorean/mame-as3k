@@ -43363,6 +43363,9 @@ asmapro
 
 @source:skeleton/alphasma3k.cpp
 asma3k
+asma3kdi
+asma3kdv
+asma3kdvl
 
 @source:skeleton/am1000.cpp
 am1000
