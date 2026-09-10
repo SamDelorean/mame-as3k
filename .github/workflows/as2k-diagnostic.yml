@@ -1,0 +1,35 @@
+name: AS2000 diagnostic build
+
+on:
+  push:
+    branches:
+      - as2k-mame0289-dev
+    paths:
+      - '.github/workflows/as2k-diagnostic.yml'
+      - 'src/mame/skeleton/alphasma.cpp'
+      - 'src/devices/cpu/mc68hc11/**'
+      - 'src/devices/video/hd44780.*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-as2k:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@main
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev libsdl2-ttf-dev libfontconfig-dev libasound2-dev libxinerama-dev libxi-dev
+      - name: Build focused AlphaSmart target
+        run: |
+          make -j3 SUBTARGET=as2kdiag SOURCES=src/mame/skeleton/alphasma.cpp REGENIE=1
+      - name: Validate target
+        run: ./as2kdiag -validate
+      - uses: actions/upload-artifact@main
+        with:
+          name: as2kdiag-linux-${{ github.sha }}
+          path: as2kdiag
+          if-no-files-found: error
