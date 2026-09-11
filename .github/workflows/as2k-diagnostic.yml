@@ -36,8 +36,13 @@ jobs:
           assert old in s
           s = s.replace(old, new, 1)
 
+          old = 'INPUT_CHANGED_MEMBER(alphasmart_state::kb_irq)\n{\n\t// IRQ on every key transition\n\tm_maincpu->set_input_line(MC68HC11_IRQ_LINE, ASSERT_LINE);\n}'
+          new = '''INPUT_CHANGED_MEMBER(alphasmart_state::kb_irq)\n{\n\t// IRQ on every key transition\n\tlogerror("AS2KTRACE KEY pc=%04X old=%u new=%u param=%u\\n", unsigned(m_maincpu->pc()), unsigned(oldval), unsigned(newval), unsigned(param));\n\tm_maincpu->set_input_line(MC68HC11_IRQ_LINE, ASSERT_LINE);\n}'''
+          assert old in s
+          s = s.replace(old, new, 1)
+
           old = 'void asma2k_state::lcd_ctrl_w(uint8_t data)\n{\n\tuint8_t changed = (m_lcd_ctrl ^ data) & data;'
-          new = '''void asma2k_state::zpsd_pmr_w(uint8_t data)\n{\n\tlogerror("AS2KTRACE PMR pc=%04X data=%02X pa=%02X\\n", unsigned(m_maincpu->pc()), data, m_port_a);\n}\n\nvoid asma2k_state::lcd_ctrl_w(uint8_t data)\n{\n\tuint8_t changed = (m_lcd_ctrl ^ data) & data;\n\tlogerror("AS2KTRACE CTRL pc=%04X old=%02X new=%02X pa=%02X rise=%02X dict=%u\\n", unsigned(m_maincpu->pc()), m_lcd_ctrl, data, m_port_a, changed, unsigned((m_port_a & 0x30) >> 3 | (data & 0x80) >> 7));'''
+          new = '''void asma2k_state::zpsd_pmr_w(uint8_t data)\n{\n\tlogerror("AS2KTRACE PMR pc=%04X data=%02X pa=%02X\\n", unsigned(m_maincpu->pc()), data, m_port_a);\n}\n\nvoid asma2k_state::lcd_ctrl_w(uint8_t data)\n{\n\tuint8_t changed = (m_lcd_ctrl ^ data) & data;\n\tlogerror("AS2KTRACE CTRL pc=%04X old=%02X new=%02X pa=%02X rise=%02X dict=%u\\n", unsigned(m_maincpu->pc()), m_lcd_ctrl, data, m_port_a, changed, unsigned((m_port_a & 0x30) >> 3 | (data & 0x80) >> 7));\n\tif (changed & 0x03)\n\t\tlogerror("AS2KTRACE LCD pc=%04X e=%u rs=%u rw=%u nibble=%X matrixh=%02X pd=%02X\\n", unsigned(m_maincpu->pc()), unsigned(changed & 0x03), unsigned(BIT(m_matrix[1], 1)), unsigned(BIT(m_matrix[1], 2)), unsigned((m_port_d >> 2) & 0x0f), m_matrix[1], m_port_d);'''
           assert old in s
           s = s.replace(old, new, 1)
 
@@ -52,7 +57,7 @@ jobs:
           s = s.replace(old, new, 1)
 
           old = '\tm_dictbank->configure_entries(0, 8, memregion("spellcheck")->base(), 0x4000);\n\tm_dictbank->set_entry(0);'
-          new = '\tm_dictbank->configure_entries(0, 8, memregion("spellcheck")->base(), 0x4000);\n\tm_dictbank->set_entry(0);\n\tlogerror("AS2KTRACE START dict=0\\n");'
+          new = '\tm_dictbank->configure_entries(0, 8, memregion("spellcheck")->base(), 0x4000);\n\tm_dictbank->set_entry(0);\n\tlogerror("AS2KTRACE START dict=0 trace=lcd-key-v2\\n");'
           assert old in s
           s = s.replace(old, new, 1)
 
