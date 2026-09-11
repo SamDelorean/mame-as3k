@@ -22,14 +22,29 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsdl2-dev libsdl2-ttf-dev libfontconfig-dev libasound2-dev libxinerama-dev libxi-dev qt6-base-dev qt6-base-dev-tools
+          sudo apt-get install -y libsdl2-dev libsdl2-ttf-dev libfontconfig-dev libasound2-dev libxinerama-dev libxi-dev
       - name: Build focused AlphaSmart target
         run: |
-          make -j3 SUBTARGET=as2kdiag SOURCES=src/mame/skeleton/alphasma.cpp REGENIE=1
+          make -j3 SUBTARGET=as2kdiag SOURCES=src/mame/skeleton/alphasma.cpp REGENIE=1 USE_QTDEBUG=0
       - name: Validate target
         run: ./as2kdiag -validate
+      - name: Assemble portable diagnostic runtime
+        run: |
+          mkdir -p as2kdiag-runtime/lib
+          cp as2kdiag as2kdiag-runtime/
+          ldd ./as2kdiag | awk '/=> \/|^\// { for (i=1;i<=NF;i++) if ($i ~ /^\//) print $i }' | sort -u > as2kdiag-runtime/ldd-paths.txt
+          while read -r lib; do cp -L "$lib" as2kdiag-runtime/lib/; done < as2kdiag-runtime/ldd-paths.txt
+          cat > as2kdiag-runtime/run-headless.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -e
+          HERE="$(cd "$(dirname "$0")" && pwd)"
+          export LD_LIBRARY_PATH="$HERE/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          exec "$HERE/as2kdiag" "$@"
+          EOF
+          chmod +x as2kdiag-runtime/run-headless.sh
+          ./as2kdiag-runtime/run-headless.sh -validate
       - uses: actions/upload-artifact@main
         with:
-          name: as2kdiag-linux-${{ github.sha }}
-          path: as2kdiag
+          name: as2kdiag-portable-${{ github.sha }}
+          path: as2kdiag-runtime
           if-no-files-found: error
