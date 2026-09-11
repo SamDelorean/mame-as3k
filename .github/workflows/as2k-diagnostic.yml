@@ -23,6 +23,43 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libsdl2-dev libsdl2-ttf-dev libfontconfig-dev libasound2-dev libxinerama-dev libxi-dev
+      - name: Instrument AS2000 control paths
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/mame/skeleton/alphasma.cpp')
+          s = p.read_text()
+
+          old = '\tvoid lcd_ctrl_w(uint8_t data);\n\tvirtual void port_a_w(uint8_t data) override;'
+          new = '\tvoid zpsd_pmr_w(uint8_t data);\n\tvoid lcd_ctrl_w(uint8_t data);\n\tvirtual void port_a_w(uint8_t data) override;'
+          assert old in s
+          s = s.replace(old, new, 1)
+
+          old = 'void asma2k_state::lcd_ctrl_w(uint8_t data)\n{\n\tuint8_t changed = (m_lcd_ctrl ^ data) & data;'
+          new = '''void asma2k_state::zpsd_pmr_w(uint8_t data)\n{\n\tlogerror("AS2KTRACE PMR pc=%04X data=%02X pa=%02X\\n", unsigned(m_maincpu->pc()), data, m_port_a);\n}\n\nvoid asma2k_state::lcd_ctrl_w(uint8_t data)\n{\n\tuint8_t changed = (m_lcd_ctrl ^ data) & data;\n\tlogerror("AS2KTRACE CTRL pc=%04X old=%02X new=%02X pa=%02X rise=%02X dict=%u\\n", unsigned(m_maincpu->pc()), m_lcd_ctrl, data, m_port_a, changed, unsigned((m_port_a & 0x30) >> 3 | (data & 0x80) >> 7));'''
+          assert old in s
+          s = s.replace(old, new, 1)
+
+          old = 'void asma2k_state::port_a_w(uint8_t data)\n{\n\tm_io_view.select(BIT(data, 6));'
+          new = '''void asma2k_state::port_a_w(uint8_t data)\n{\n\tlogerror("AS2KTRACE PA pc=%04X old=%02X new=%02X view=%u ram=%u dict=%u\\n", unsigned(m_maincpu->pc()), m_port_a, data, unsigned(BIT(data, 6)), unsigned((data >> 4) & 0x03), unsigned((data & 0x30) >> 3 | (m_lcd_ctrl & 0x80) >> 7));\n\tm_io_view.select(BIT(data, 6));'''
+          assert old in s
+          s = s.replace(old, new, 1)
+
+          old = '\tm_io_view[0](0x2000, 0x2000).rw(FUNC(asma2k_state::kb_r), FUNC(asma2k_state::kb_matrixh_w));\n\tm_io_view[0](0x4000, 0x4000).w(FUNC(asma2k_state::lcd_ctrl_w));'
+          new = '\tm_io_view[0](0x2000, 0x2000).rw(FUNC(asma2k_state::kb_r), FUNC(asma2k_state::kb_matrixh_w));\n\tm_io_view[0](0x3010, 0x3010).w(FUNC(asma2k_state::zpsd_pmr_w));\n\tm_io_view[0](0x4000, 0x4000).w(FUNC(asma2k_state::lcd_ctrl_w));'
+          assert old in s
+          s = s.replace(old, new, 1)
+
+          old = '\tm_dictbank->configure_entries(0, 8, memregion("spellcheck")->base(), 0x4000);\n\tm_dictbank->set_entry(0);'
+          new = '\tm_dictbank->configure_entries(0, 8, memregion("spellcheck")->base(), 0x4000);\n\tm_dictbank->set_entry(0);\n\tlogerror("AS2KTRACE START dict=0\\n");'
+          assert old in s
+          s = s.replace(old, new, 1)
+
+          p.write_text(s)
+          PY
+          git diff --check
+          git diff -- src/mame/skeleton/alphasma.cpp
       - name: Build focused AlphaSmart target
         run: |
           make -j3 SUBTARGET=as2kdiag SOURCES=src/mame/skeleton/alphasma.cpp REGENIE=1 USE_QTDEBUG=0
@@ -32,8 +69,9 @@ jobs:
         run: |
           mkdir -p as2kdiag-runtime/lib
           cp as2kdiag as2kdiag-runtime/
-          ldd ./as2kdiag | awk '/=> \/|^\// { for (i=1;i<=NF;i++) if ($i ~ /^\//) print $i }' | sort -u > as2kdiag-runtime/ldd-paths.txt
-          while read -r lib; do cp -L "$lib" as2kdiag-runtime/lib/; done < as2kdiag-runtime/ldd-paths.txt
+          git diff -- src/mame/skeleton/alphasma.cpp > as2kdiag-runtime/instrumentation.patch
+          TTF_LIB="$(ldd ./as2kdiag | awk '$1 ~ /libSDL2_ttf/ {print $3; exit}')"
+          if [ -n "$TTF_LIB" ] && [ -f "$TTF_LIB" ]; then cp -L "$TTF_LIB" as2kdiag-runtime/lib/; fi
           cat > as2kdiag-runtime/run-headless.sh <<'EOF'
           #!/usr/bin/env bash
           set -e
@@ -45,6 +83,6 @@ jobs:
           ./as2kdiag-runtime/run-headless.sh -validate
       - uses: actions/upload-artifact@main
         with:
-          name: as2kdiag-portable-${{ github.sha }}
+          name: as2kdiag-trace-${{ github.sha }}
           path: as2kdiag-runtime
           if-no-files-found: error
