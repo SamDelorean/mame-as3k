@@ -1,0 +1,58 @@
+name: AS2000 keyboard regression build
+
+on:
+  push:
+    branches:
+      - as2k-mame0289-dev
+    paths:
+      - '.github/workflows/as2k-keyboard-regression.yml'
+      - 'patches/as2k-keyboard-bindings.patch'
+      - 'src/mame/skeleton/alphasma.cpp'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-as2k-keyboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@main
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev libsdl2-ttf-dev libfontconfig-dev libasound2-dev libxinerama-dev libxi-dev
+      - name: Apply verified keyboard binding patch
+        run: |
+          git apply --check patches/as2k-keyboard-bindings.patch
+          git apply patches/as2k-keyboard-bindings.patch
+          grep -F "PORT_CODE(KEYCODE_K)     PORT_CHAR('k') PORT_CHAR('K')" src/mame/skeleton/alphasma.cpp
+          grep -F "PORT_CODE(KEYCODE_EQUALS) PORT_CHAR('=') PORT_CHAR('+')" src/mame/skeleton/alphasma.cpp
+          grep -F "PORT_CODE(KEYCODE_Z)    PORT_CHAR('z')  PORT_CHAR('Z')" src/mame/skeleton/alphasma.cpp
+          git diff --check
+      - name: Build focused AlphaSmart target
+        run: |
+          make -j3 SUBTARGET=as2kdiag SOURCES=src/mame/skeleton/alphasma.cpp REGENIE=1 USE_QTDEBUG=0
+      - name: Validate target
+        run: ./as2kdiag -validate
+      - name: Assemble regression runtime
+        run: |
+          mkdir -p as2kdiag-runtime/lib
+          cp as2kdiag as2kdiag-runtime/
+          cp patches/as2k-keyboard-bindings.patch as2kdiag-runtime/
+          TTF_LIB="$(ldd ./as2kdiag | awk '$1 ~ /libSDL2_ttf/ {print $3; exit}')"
+          if [ -n "$TTF_LIB" ] && [ -f "$TTF_LIB" ]; then cp -L "$TTF_LIB" as2kdiag-runtime/lib/; fi
+          cat > as2kdiag-runtime/run-headless.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -e
+          HERE="$(cd "$(dirname "$0")" && pwd)"
+          export LD_LIBRARY_PATH="$HERE/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          exec "$HERE/as2kdiag" "$@"
+          EOF
+          chmod +x as2kdiag-runtime/run-headless.sh
+          ./as2kdiag-runtime/run-headless.sh -validate
+      - uses: actions/upload-artifact@main
+        with:
+          name: as2kdiag-kbd-${{ github.sha }}
+          path: as2kdiag-runtime
+          if-no-files-found: error
