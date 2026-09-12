@@ -6,6 +6,7 @@ on:
       - as2k-mame0289-dev
     paths:
       - '.github/workflows/as2k-diagnostic.yml'
+      - 'scripts/as2k_keyboard_input_fixes.patch'
       - 'src/mame/skeleton/alphasma.cpp'
       - 'src/devices/cpu/mc68hc11/**'
       - 'src/devices/video/hd44780.*'
@@ -23,6 +24,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libsdl2-dev libsdl2-ttf-dev libfontconfig-dev libasound2-dev libxinerama-dev libxi-dev
+      - name: Apply validated AS2000 keyboard fixes
+        run: |
+          git apply scripts/as2k_keyboard_input_fixes.patch
+          git diff --check
+          grep -F "PORT_CHAR('k') PORT_CHAR('K')" src/mame/skeleton/alphasma.cpp
+          grep -F "PORT_CHAR('z')  PORT_CHAR('Z')" src/mame/skeleton/alphasma.cpp
+          grep -F "PORT_CHAR('=') PORT_CHAR('+')" src/mame/skeleton/alphasma.cpp
+          grep -F 'PORT_NAME("Send")' src/mame/skeleton/alphasma.cpp
       - name: Instrument AS2000 control paths
         run: |
           python3 - <<'PY'
