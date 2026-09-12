@@ -3,7 +3,7 @@
 -- AS2000 firmware-level auto-off diagnostic for BIOS v3.1.4.
 --
 -- This deliberately does NOT emulate the physical low-power wake source.
--- The stock MC68HC11 core currently fails to resume STOP for a masked XIRQ.
+-- This control predates the production MC68HC11 masked-XIRQ STOP wake fix.
 -- To validate the firmware path independently, this script observes the STOP
 -- instruction at $87D7 and resumes execution at $87D8, which is the behaviour
 -- expected for a masked XIRQ wake according to the HC11 documentation.

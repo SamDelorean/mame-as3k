@@ -7,8 +7,8 @@ on:
     paths:
       - '.github/workflows/as2k-diagnostic.yml'
       - 'scripts/as2k_apply_input_fixes.py'
-      - 'scripts/as2k_apply_hc11_stop_xirq_fix.py'
       - 'scripts/as2k_apply_xirq_timer_test.py'
+      - 'scripts/as2k_test_hc11_stop_xirq.py'
       - 'src/mame/skeleton/alphasma.cpp'
       - 'src/devices/cpu/mc68hc11/**'
       - 'src/devices/video/hd44780.*'
@@ -34,11 +34,9 @@ jobs:
           grep -F "PORT_CHAR('z')  PORT_CHAR('Z')" src/mame/skeleton/alphasma.cpp
           grep -F "PORT_CHAR('=') PORT_CHAR('+')" src/mame/skeleton/alphasma.cpp
           grep -F 'PORT_NAME("Send")' src/mame/skeleton/alphasma.cpp
-      - name: Apply diagnostic HC11 STOP XIRQ wake fix
-        run: |
-          python3 scripts/as2k_apply_hc11_stop_xirq_fix.py
-          git diff --check
-          git diff -- src/devices/cpu/mc68hc11/mc68hc11.cpp
+      # STOP/XIRQ wake handling is in the production MC68HC11 core.
+      - name: Check HC11 STOP XIRQ control flow
+        run: python3 scripts/as2k_test_hc11_stop_xirq.py
       - name: Instrument AS2000 control paths
         run: |
           python3 - <<'PY'
