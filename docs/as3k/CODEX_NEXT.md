@@ -33,9 +33,9 @@ Do not broaden into Port D or other peripherals.
 
 ## A. Repository gate
 
-From `~/Projects/alphasmart-as3k/mame0289`:
+From `~/Projects/alphasmart/mame-as3k-dev`:
 
-1. `git pull --ff-only as3k-project as3k-mame0289-dev`.
+1. `git pull --ff-only origin as3k-mame0289-dev`.
 2. Confirm branch `as3k-mame0289-dev`, clean tracked status, and `git diff --check`.
 3. Confirm latch commit `c5e6eb1ba51694e672d133667f86c2d3c1f71be1` is an ancestor of HEAD.
 4. Confirm `docs/as3k/STATUS.md` identifies EZ Port-A fidelity as the next stage.
@@ -191,7 +191,7 @@ After validation:
 
 Update `docs/as3k/STATUS.md` to keep the public handoff factual if the implementation passes.
 
-Commit only safe core/documentation changes and push only to `as3k-project/as3k-mame0289-dev`.
+Commit only safe core/documentation changes and push only to `origin/as3k-mame0289-dev`.
 
 ## Pass criteria
 

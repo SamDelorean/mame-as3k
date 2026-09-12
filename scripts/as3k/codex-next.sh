@@ -11,7 +11,7 @@ if [ "$branch" != "as3k-mame0289-dev" ]; then
 	exit 1
 fi
 
-git pull --ff-only as3k-project as3k-mame0289-dev
+git pull --ff-only origin as3k-mame0289-dev
 
 {
 	printf '%s\n\n' 'Follow the project instructions and execute the current task completely.'
