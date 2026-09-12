@@ -7,6 +7,8 @@ on:
     paths:
       - '.github/workflows/as2k-diagnostic.yml'
       - 'scripts/as2k_apply_input_fixes.py'
+      - 'scripts/as2k_apply_hc11_stop_xirq_fix.py'
+      - 'scripts/as2k_apply_xirq_timer_test.py'
       - 'src/mame/skeleton/alphasma.cpp'
       - 'src/devices/cpu/mc68hc11/**'
       - 'src/devices/video/hd44780.*'
@@ -32,6 +34,11 @@ jobs:
           grep -F "PORT_CHAR('z')  PORT_CHAR('Z')" src/mame/skeleton/alphasma.cpp
           grep -F "PORT_CHAR('=') PORT_CHAR('+')" src/mame/skeleton/alphasma.cpp
           grep -F 'PORT_NAME("Send")' src/mame/skeleton/alphasma.cpp
+      - name: Apply diagnostic HC11 STOP XIRQ wake fix
+        run: |
+          python3 scripts/as2k_apply_hc11_stop_xirq_fix.py
+          git diff --check
+          git diff -- src/devices/cpu/mc68hc11/mc68hc11.cpp
       - name: Instrument AS2000 control paths
         run: |
           python3 - <<'PY'
@@ -73,17 +80,15 @@ jobs:
           p.write_text(s)
           PY
           git diff --check
-          git diff -- src/mame/skeleton/alphasma.cpp
       - name: Build focused AlphaSmart target
-        run: |
-          make -j3 SUBTARGET=as2kdiag SOURCES=src/mame/skeleton/alphasma.cpp REGENIE=1 USE_QTDEBUG=0
+        run: make -j3 SUBTARGET=as2kdiag SOURCES=src/mame/skeleton/alphasma.cpp REGENIE=1 USE_QTDEBUG=0
       - name: Validate target
         run: ./as2kdiag -validate
-      - name: Assemble portable diagnostic runtime
+      - name: Assemble baseline diagnostic runtime
         run: |
           mkdir -p as2kdiag-runtime/lib
           cp as2kdiag as2kdiag-runtime/
-          git diff -- src/mame/skeleton/alphasma.cpp > as2kdiag-runtime/instrumentation.patch
+          git diff -- src/mame/skeleton/alphasma.cpp src/devices/cpu/mc68hc11/mc68hc11.cpp > as2kdiag-runtime/instrumentation.patch
           TTF_LIB="$(ldd ./as2kdiag | awk '$1 ~ /libSDL2_ttf/ {print $3; exit}')"
           if [ -n "$TTF_LIB" ] && [ -f "$TTF_LIB" ]; then cp -L "$TTF_LIB" as2kdiag-runtime/lib/; fi
           cat > as2kdiag-runtime/run-headless.sh <<'EOF'
@@ -95,8 +100,36 @@ jobs:
           EOF
           chmod +x as2kdiag-runtime/run-headless.sh
           ./as2kdiag-runtime/run-headless.sh -validate
+      - name: Add synthetic XIRQ auto-off experiment
+        run: |
+          python3 scripts/as2k_apply_xirq_timer_test.py
+          git diff --check
+          git diff -- src/mame/skeleton/alphasma.cpp
+      - name: Build XIRQ experiment variant
+        run: |
+          make -j3 SUBTARGET=as2kdiag SOURCES=src/mame/skeleton/alphasma.cpp REGENIE=1 USE_QTDEBUG=0
+          cp as2kdiag as2kdiag-xirq
+          ./as2kdiag-xirq -validate
+      - name: Assemble XIRQ experiment runtime
+        run: |
+          mkdir -p as2kdiag-xirq-runtime/lib
+          cp as2kdiag-xirq as2kdiag-xirq-runtime/
+          git diff -- src/mame/skeleton/alphasma.cpp src/devices/cpu/mc68hc11/mc68hc11.cpp > as2kdiag-xirq-runtime/instrumentation.patch
+          TTF_LIB="$(ldd ./as2kdiag-xirq | awk '$1 ~ /libSDL2_ttf/ {print $3; exit}')"
+          if [ -n "$TTF_LIB" ] && [ -f "$TTF_LIB" ]; then cp -L "$TTF_LIB" as2kdiag-xirq-runtime/lib/; fi
+          cat > as2kdiag-xirq-runtime/run-headless.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -e
+          HERE="$(cd "$(dirname "$0")" && pwd)"
+          export LD_LIBRARY_PATH="$HERE/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          exec "$HERE/as2kdiag-xirq" "$@"
+          EOF
+          chmod +x as2kdiag-xirq-runtime/run-headless.sh
+          ./as2kdiag-xirq-runtime/run-headless.sh -validate
       - uses: actions/upload-artifact@main
         with:
           name: as2kdiag-trace-${{ github.sha }}
-          path: as2kdiag-runtime
+          path: |
+            as2kdiag-runtime
+            as2kdiag-xirq-runtime
           if-no-files-found: error
