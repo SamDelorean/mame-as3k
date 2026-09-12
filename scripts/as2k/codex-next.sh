@@ -11,6 +11,12 @@ if [ "$branch" != "as2k-mame0289-dev" ]; then
 	printf 'error: expected branch as2k-mame0289-dev, found %s\n' "$branch" >&2
 	exit 1
 fi
+if [ -n "$(git status --porcelain)" ]; then
+	printf 'error: AS2000 worktree is not clean before Codex\n' >&2
+	git status --short
+	exit 1
+fi
+
 
 git pull --ff-only origin as2k-mame0289-dev
 
