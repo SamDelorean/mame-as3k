@@ -64,4 +64,7 @@ Validator `bash -n` and `git diff --check` passed.
 
 Next task: investigate the existing AS2000 nonexistent-register $0001 read TODO;
 no physical wake-source modeling is authorized by that handoff.
-Publication details are recorded below after committing.
+Validated change and next-task handoff committed as `f666348a4c5`.
+Push to `origin/as2k-mame0289-dev` succeeded (`b3d6947a11f..f666348a4c5`).
+Final `git status --short` after that publication: empty (clean).
+This publication receipt is a subsequent documentation-only commit.
