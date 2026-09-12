@@ -1,112 +1,128 @@
-# Current Codex task — AS2000 keyboard matrix regression gate
+# Current Codex task — MC68HC11 masked-XIRQ STOP wake fidelity
 
 Date: 2026-09-11
 
-Read `AGENTS.md`, this file, the current driver
-`src/mame/skeleton/alphasma.cpp`, the diagnostic workflow
-`.github/workflows/as2k-diagnostic.yml`, and
-`scripts/as2k_decode_trace.py` first.
+Read `AGENTS.md` and inspect the current branch history before editing.
 
 ## Established state
 
-Treat the following commits as established:
+Treat the current branch through `fd523cef411` as established work.
 
-- `491a00067df` — portable AS2000 diagnostic runtime.
-- `9863db37a4b` — diagnostic instrumentation for control latch and PMR.
-- `6a29953324b` — LCD bus and keyboard wake-path tracing.
-- `94e13021e23` — LCD trace decoder.
+Keyboard work has already advanced beyond the earlier regression gate.
+Do not repeat the completed keyboard-binding investigation unless a regression
+directly requires it.
 
-Current keyboard implementation:
+Relevant established diagnostics include:
 
-- 16 matrix columns: `COL.0` through `COL.15`;
-- matrix selection is active low;
-- `kb_r()` ANDs the input data of every selected column;
-- low matrix byte is written at `0x9000`;
-- high matrix byte is written at `0x2000`;
-- every key transition asserts MC68HC11 IRQ;
-- writing the low matrix byte clears that IRQ.
+- validated AS2000 keyboard binding fixes;
+- diagnostic MC68HC11 STOP/XIRQ correction helper;
+- synthetic periodic XIRQ experiment;
+- firmware-level auto-off diagnostic.
 
-Current AS2000 RAM bank selection in `asma2k_state::port_a_w()` uses only
-PA4–PA5:
+The existing evidence isolates this behavior:
 
-`m_rambank->set_entry((data >> 4) & 0x03);`
+- AS2000 firmware executes STOP at approximately `$87D7`;
+- the firmware expects execution to resume at the instruction after STOP when
+  a masked XIRQ wake occurs;
+- the current stock MC68HC11 core prevents masked XIRQ from waking STOP;
+- forcing only the post-STOP resume allows the firmware idle counter at `$004A`
+  to progress to `$94` (148 cycles) and reach the final power-off loop near
+  `$87ED`;
+- therefore the firmware path is independently demonstrated and the remaining
+  defect is in MC68HC11 STOP/XIRQ wake fidelity.
 
-Preserve this. Do not reinterpret PA3 as an additional RAM-bank bit.
-
-The existing LCD path and reconstructed 40x4 text behavior are also regression
-gates. Do not redesign them in this task.
-
----
+The synthetic 1.25 s XIRQ period is diagnostic only. It is an inferred test
+value and MUST NOT be documented or implemented as verified AlphaSmart
+hardware timing.
 
 ## A. Repository gate
 
-Work from:
+Work only in:
 
 `~/Projects/alphasmart/mame-as2k`
 
-1. Pull only `origin/as2k-mame0289-dev` using `--ff-only`.
-2. Confirm branch `as2k-mame0289-dev`.
-3. Confirm tracked status is clean before edits.
-4. Run `git diff --check`.
-5. Do not touch `master`.
+Branch must be:
 
-If the repository is not in this state, stop and report.
+`as2k-mame0289-dev`
 
----
+Pull only with:
 
-## B. Static keyboard-matrix audit
+`git pull --ff-only origin as2k-mame0289-dev`
 
-Build a factual table for every defined AS2000 key containing at minimum:
+Run before edits:
 
-- `COL.n`;
-- bit mask within that column;
-- MAME `KEYCODE_*`;
-- unshifted character/function;
-- shifted character/function where defined;
-- whether the position is intentionally unused.
+`git status --short`
+`git diff --check`
 
-Verify:
+Stop if tracked state is unexpectedly dirty.
 
-1. all 16 columns exist;
-2. every active key occupies exactly one matrix position;
-3. no accidental duplicate host-key mapping causes an ambiguity;
-4. active-low semantics in the input definitions agree with `kb_r()`;
-5. column selection agrees with the 16-bit matrix composed from
-   `m_matrix[1] << 8 | m_matrix[0]`;
-6. IRQ assertion/clear behavior is internally consistent with the scan path.
+## B. Authorized core change
 
-Do not change a key mapping merely because it looks unusual. Change mappings
-only if there is concrete evidence that the current definition contradicts the
-known matrix or validated runtime behavior.
+This task explicitly authorizes the minimum necessary change to:
 
-Record the audit results in `docs/as2k/CODEX_RESULT.md`.
+`src/devices/cpu/mc68hc11/mc68hc11.cpp`
 
----
+Implement correct MC68HC11 XIRQ wake behavior for STOP.
 
-## C. PA3 / RAM-bank regression gate
+Required semantics:
 
-Confirm statically that:
+1. An asserted XIRQ must be capable of waking the processor from STOP even
+   when CCR.X masks XIRQ interrupt service.
+2. In that masked-XIRQ case:
+   - wake from STOP;
+   - resume execution after STOP;
+   - do not vector into the XIRQ ISR;
+   - do not leave a false pending XIRQ solely because it was used as a masked
+     wake source.
+3. Normal unmasked XIRQ interrupt behavior must remain unchanged.
+4. XIRQ behavior outside STOP must remain unchanged.
+5. Do not generalize the change to IRQ, timer hardware, or unrelated CPU
+   behavior without concrete evidence.
 
-- AS2000 RAM banking still has exactly four entries selected by PA4–PA5;
-- PA3 is not used to select an extra RAM bank;
-- dictionary banking and I/O-view selection remain independent of that rule.
+Use the existing
+`scripts/as2k_apply_hc11_stop_xirq_fix.py`
+only as diagnostic/reference evidence. Do not blindly apply it on top of a
+production implementation.
 
-Do not expand RAM banking in this task.
+## C. Diagnostic infrastructure cleanup
 
-If any existing code contradicts these requirements, stop and report before
-making a speculative correction.
+The current diagnostic workflow may apply the temporary MC68HC11 helper before
+building.
 
----
+After the production core behavior is implemented, ensure CI does NOT attempt
+to patch the same core logic a second time.
 
-## D. Diagnostic build
+Update the diagnostic workflow/helper arrangement minimally so that:
 
-Use the existing focused diagnostic target and workflow semantics.
+- the production source is what is tested;
+- no duplicate patch is applied;
+- historical diagnostic intent remains understandable;
+- the synthetic XIRQ experiment can still be built independently.
+
+It is acceptable to remove or retire a helper that is no longer needed after
+the production fix, provided its historical purpose remains recoverable from
+Git history.
+
+## D. Static regression audit
+
+Verify before dynamic testing:
+
+- STOP state transition logic is consistent with the new masked-XIRQ wake path;
+- unmasked XIRQ still reaches normal interrupt handling;
+- masked XIRQ outside STOP remains masked;
+- no IRQ semantics are changed;
+- no AS2000 RAM-bank logic is changed;
+- PA3 is not introduced as an extra RAM-bank bit;
+- no keyboard matrix mapping is changed unless a new regression proves it
+  necessary.
+
+## E. Build gates
 
 At minimum run:
 
 `make -j3 SUBTARGET=as2kdiag SOURCES=src/mame/skeleton/alphasma.cpp REGENIE=1 USE_QTDEBUG=0`
 
-Then run:
+Then:
 
 `./as2kdiag -validate`
 
@@ -114,117 +130,109 @@ Also run:
 
 `git diff --check`
 
-Do not add proprietary ROMs or firmware to the repository.
+If the existing workflow builds both the baseline diagnostic runtime and the
+synthetic-XIRQ variant, preserve that capability.
 
----
+## F. Dynamic STOP/XIRQ validation
 
-## E. Dynamic keyboard regression
+Use the existing synthetic XIRQ experiment as the primary AS2000 test harness.
 
-Use the narrowest reliable MAME mechanism available locally to exercise
-keyboard input without modifying proprietary firmware.
+Validate, as far as the current harness permits:
 
-The goal is to validate the matrix implementation, not to redesign it.
+1. firmware reaches STOP;
+2. XIRQ is asserted while STOPped;
+3. with CCR.X masked, CPU wakes and resumes after STOP;
+4. it does not incorrectly enter the XIRQ interrupt vector in that masked case;
+5. repeated wakes permit the firmware idle counter to advance;
+6. the firmware can progress toward the established auto-off path;
+7. no new boot, keyboard, LCD, or memory regression appears.
 
-Exercise representative keys first, then expand to every defined matrix
-position if the mechanism is reliable.
+The existing Lua firmware-level forced-resume test may be used as a reference
+control, but it MUST NOT be presented as proof that the production CPU-core
+fix works because that script bypasses the actual wake mechanism.
 
-For each exercised key verify, where observable:
+If practical, also exercise an unmasked-XIRQ case and confirm that normal XIRQ
+interrupt service still occurs.
 
-1. the key transition produces `AS2KTRACE KEY`;
-2. firmware scan selects the expected matrix column;
-3. `kb_r()` returns the expected active-low row bit;
-4. IRQ assertion occurs on transition;
-5. scan activity clears the IRQ through the established low-matrix write path;
-6. the machine returns to normal execution rather than entering a new failure;
-7. printable keys that reach the editor produce the expected character.
+If a particular dynamic case cannot be automated reliably, document that
+limitation rather than inventing a result.
 
-If reliable automated injection of every key cannot be established with the
-current MAME interfaces, do not invent results. Validate the maximum defensible
-subset and document exactly what prevented exhaustive dynamic coverage.
+## G. Timing restriction
 
-Temporary local-only diagnostic logging is permitted if required to observe
-matrix selection/readback, but remove it before the final build and commit.
+Do NOT promote the synthetic XIRQ period of 1.25 s into production AS2000
+hardware emulation.
 
-Do not commit generated logs or local input recordings.
+Its current purpose is only to stimulate the firmware sufficiently to test
+STOP/XIRQ behavior.
 
----
+Actual AlphaSmart low-power wake source and timing remain separate hardware
+reverse-engineering questions.
 
-## F. LCD regression
+## H. Scope restrictions
 
-For any run that produces LCD trace data, decode it with:
+Do not implement:
 
-`python3 scripts/as2k_decode_trace.py <trace-file>`
-
-Use the reconstructed text view to confirm that keyboard testing did not
-regress established LCD behavior.
-
-Do not modify KS0066/HD44780 core behavior in this task.
-
----
-
-## G. Scope restrictions
-
-Do not implement or redesign:
-
+- a production synthetic XIRQ timer;
+- guessed auto-off oscillator hardware;
+- new keyboard mappings unrelated to a regression;
 - new RAM banking;
-- PA3 banking semantics;
-- LCD controller core behavior;
-- MC68HC11 core behavior;
-- dictionary hardware;
-- serial/USB hardware;
-- power-management behavior unrelated to keyboard wake/scan;
-- AlphaSmart 3000 or NEO behavior.
+- PA3 RAM-bank semantics;
+- LCD controller changes;
+- dictionary hardware changes;
+- serial/USB changes;
+- AS3000 or NEO changes.
 
-Do not add ROMs, firmware, proprietary source, dumps, logs, generated
-executables, or runtime artifacts to Git.
+Do not add ROMs, firmware dumps, binaries, logs, or generated runtime artifacts
+to Git.
 
----
+## I. Result report
 
-## H. Result and publication gate
+Replace:
 
-Replace `docs/as2k/CODEX_RESULT.md` with a concise factual report containing:
+`docs/as2k/CODEX_RESULT.md`
 
-- repository/branch gate result;
-- complete static matrix audit summary;
-- any duplicate/ambiguous mappings found;
-- confirmation of active-low scan semantics;
-- PA3/RAM-bank regression result;
-- exact build and validation commands/results;
-- dynamic keys exercised and observed matrix positions;
-- IRQ assertion/clear evidence;
-- LCD regression result where available;
-- limitations preventing exhaustive dynamic coverage, if any;
+with a factual report containing:
+
+- repository gate;
+- exact core behavior changed;
+- explanation of masked-XIRQ STOP semantics;
 - files changed;
-- final `git diff --check`;
+- CI/helper migration performed;
+- build commands/results;
+- dynamic STOP/XIRQ evidence;
+- masked case result;
+- unmasked case result if tested;
+- auto-off firmware progression observed;
+- explicit statement that 1.25 s remains unverified diagnostic timing;
+- regressions checked;
+- `git diff --check`;
 - final `git status --short`;
-- commit SHA and push result if a commit was justified.
+- commit SHA and push result.
 
-If the audit finds no defect requiring source changes, it is acceptable for the
-only tracked changes to be documentation/handoff updates.
+## J. Publication gate
 
-Commit only safe tracked changes and push only to:
+If and only if the core change and regressions are defensible:
 
-`origin/as2k-mame0289-dev`
+- commit the safe tracked changes;
+- push only to `origin/as2k-mame0289-dev`.
+
+Do not push to `master`.
 
 ## Pass criteria
 
-Pass means:
+Pass requires:
 
-- all 16 keyboard columns and their active positions are accounted for;
-- scan polarity and `kb_r()` selection logic are internally consistent;
-- no unexplained key-matrix collision is found;
-- representative dynamic keyboard scanning is demonstrated, or any inability
-  to automate exhaustive injection is explicitly bounded and documented;
-- PA3 remains excluded from RAM-bank selection;
-- all four existing RAM banks remain selected only by PA4–PA5;
-- diagnostic build and validation pass;
-- existing LCD behavior is not regressed;
-- no unrelated peripheral work is introduced.
+- masked XIRQ wakes MC68HC11 from STOP;
+- masked wake resumes after STOP without false XIRQ service;
+- normal unmasked XIRQ behavior is preserved;
+- production core is tested directly, not patched twice by CI;
+- AS2000 diagnostic build passes;
+- established keyboard/LCD/memory behavior is not regressed;
+- no synthetic timing value is promoted as real hardware behavior.
 
 ## Stop condition
 
-Stop after this keyboard-matrix regression gate is audited, tested to the
-maximum reliable dynamic coverage, documented, and safely committed/pushed if
-appropriate.
+Stop after the MC68HC11 masked-XIRQ STOP wake behavior is implemented,
+validated, documented, and safely committed/pushed if all gates pass.
 
-Do not proceed to a new peripheral or broader AS2000 hardware redesign.
+Do not proceed automatically to modeling the physical AlphaSmart wake source.
