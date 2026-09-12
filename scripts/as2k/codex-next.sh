@@ -2,7 +2,7 @@
 
 set -eu
 
-repo_root=$(git rev-parse --show-toplevel)
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo_root"
 
 branch=$(git branch --show-current)
