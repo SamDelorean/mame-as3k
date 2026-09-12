@@ -4,6 +4,7 @@ set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo_root"
+git_common_dir=$(git rev-parse --git-common-dir)
 
 branch=$(git branch --show-current)
 if [ "$branch" != "as2k-mame0289-dev" ]; then
@@ -19,7 +20,7 @@ git pull --ff-only origin as2k-mame0289-dev
 	cat AGENTS.md
 	printf '%s\n' '--- docs/as2k/CODEX_NEXT.md ---'
 	cat docs/as2k/CODEX_NEXT.md
-} | codex exec --approve-for-me -C "$repo_root" -
+} | codex exec --approve-for-me --add-dir "$git_common_dir" -C "$repo_root" -
 
 printf '%s\n' '--- docs/as2k/CODEX_RESULT.md ---'
 cat docs/as2k/CODEX_RESULT.md
