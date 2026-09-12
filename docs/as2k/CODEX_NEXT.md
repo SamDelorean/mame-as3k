@@ -51,7 +51,7 @@ Pull only with:
 
 Run before edits:
 
-Repository cleanliness is already verified by the outer wrapper; do not run `git status` inside Codex.
+`git status --short`
 `git diff --check`
 
 Stop if tracked state is unexpectedly dirty.
@@ -206,7 +206,7 @@ with a factual report containing:
 - explicit statement that 1.25 s remains unverified diagnostic timing;
 - regressions checked;
 - `git diff --check`;
-- final outer-wrapper repository-cleanliness result;
+- final `git status --short`;
 - commit SHA and push result.
 
 ## J. Publication gate
