@@ -1,6 +1,6 @@
 # AS2000 high-IrDA reclaim boundary handoff
 
-This note mirrors a firmware reverse-engineering checkpoint from `SamDelorean/AS2K-V3.14.x` into the MAME work. It does not change the current Gate 1A runtime trace range.
+This note mirrors the closed firmware reverse-engineering result from `SamDelorean/AS2K-V3.14.x` into the MAME work. It changes only the documented trace/reclaim boundary; it does not modify emulator behavior.
 
 ## Stock v3.1.4 bytes
 
@@ -19,28 +19,55 @@ Therefore:
 - `$E104 = $3C`
 - direct firmware callers are known at `$D305 -> $E104` and `$D466 -> $E104`
 
-The adjacent bytes `$E102-$E103` form the 16-bit value `$1ED1`. The aligned firmware reachability pass previously showed a one-byte gap at `$E103`; that gap alone is not proof that `$E103` can be physically overwritten independently of `$E102`.
+The adjacent bytes `$E102-$E103` form the 16-bit value `$1ED1`.
+
+## Historical boundary closure
+
+The older reference firmware contains the same structural field immediately after its version string:
+
+- older field address/value: `$DD20-$DD21 = $22B3`
+- older relation: `$DD20 + $22B3 = $FFD3`
+- v3.1.4 relation: `$E102 + $1ED1 = $FFD3`
+
+The field moved by `$03E2` between firmware generations and its value decreased by exactly `$03E2`, preserving the same endpoint `$FFD3`.
+
+Therefore `$E102-$E103` is a self-relative ROM-tail span/length metadata word, not IrDA payload. It must remain byte-identical in the current V3.14.x family. Executable high-IrDA begins at `$E104`.
 
 ## MAME consequence
 
-For **Gate 1A**, keep the existing runtime safety contract unchanged:
+For **Gate 1A**, the current runtime safety contract is:
 
-- no execution in `$E103-$FFBF` after the IR detach patch;
-- no execution in the low IR candidate ranges;
+- no execution in `$E104-$FFBF` after the IR detach patch;
+- no execution in `$D098-$D487` or `$D499-$D517`;
 - `$D488-$D498` remains the protected low-range exception;
-- Send keycode `$47` must still follow the normal matrix/IRQ path and reach retained cable Send `$8606` in causal order from `$9716`;
-- do not simplify HC11 timer/MMIO/banking behavior to make this test easier.
+- Send keycode `$47` must follow the normal matrix/IRQ path and demonstrate causal `$9716 -> $8606`;
+- Print must demonstrate causal `$962D|$9804 -> $ABC9`;
+- `$D2DC`, `$D099`, and `$D437` remain forbidden;
+- do not simplify HC11 timer/MMIO/banking behavior to make the test easier.
 
-For **Gate 1B**, firmware work now adds a separate prerequisite: do not physically fill/overwrite the `$E103` boundary byte until the data ownership of `$E102-$E103` is closed. Runtime non-execution and physical overwrite safety are separate proofs.
+The corrected IR candidate reclaim is:
 
-## Reproducible local audit
+```text
+D098-D487  1008 bytes
+D499-D517   127 bytes
+E104-FFBF  7868 bytes
+-------------------
+TOTAL      9003 bytes
+```
 
-The firmware repository now provides:
+For **Gate 1B**, `$E102-$E103` must be preserved byte-for-byte. There is no longer an unresolved ownership question at this boundary, but Gate 1B remains blocked until the derived-ROM Gate 1A runtime trace and required smoke tests pass.
+
+## Reproducible evidence
+
+The firmware repository provides:
 
 - `recon/high_ir_boundary_v1.md`
 - `tools/audit_high_ir_boundary.py`
 - `tests/test_high_ir_boundary_audit.py`
+- structural protection in `tests/test_ir_detach.py`
 
-The audit validates the exact stock v3.1.4 SHA-1 locally and inventories raw big-endian occurrences of `$E102`, `$E103`, `$E104`, and `$1ED1`, plus direct extended `JSR/JMP` references to the boundary. No proprietary ROM bytes are published.
+The audit validates the exact stock v3.1.4 SHA-1 locally. No proprietary ROM bytes are published.
 
-Until that audit is reviewed against the local ROM, the public candidate accounting remains `$E103-$FFBF` and 9,004 total IR-candidate bytes, but physical reclaim of the first high-range byte is blocked.
+## Scope discipline
+
+This result does not authorize new DynFS code, host-transport reclaim, or changes to Send/Print. It only corrects the high-IrDA ownership boundary used by firmware and emulator validation.
