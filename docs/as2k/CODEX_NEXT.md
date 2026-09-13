@@ -1,46 +1,38 @@
-# Current Codex task — AS2000 LCD character rendering evidence
+# Current Codex task — promote established AS2000 input corrections
 
-Date: 2026-09-12. Branch: as2k-mame0289-dev.
+Date: 2026-09-12. Branch: as2k-mame0289-dev. Attempt 1.
 
-## Established state
-
-The $0001 investigation passed: both BIOSes read mapped $FF and immediately
-write it to TFLG1 before idle STOP. See REGISTER_0001.md; no production correction
-is justified. Hardware reserved-register behavior remains OPEN/DEFERRED.
-Preserve the published masked-XIRQ fix and its timing/coverage limits.
-Read AGENTS.md and the mandatory private AS2K_KNOWLEDGE.md first. Do not
-rediscover established banking, file-switch or keyboard findings.
+Read AGENTS.md and mandatory private AS2K_KNOWLEDGE.md first.
+LCD_RENDERING.md records accepted six-character bus/pixel consistency;
+physical charset accuracy is OPEN/DEFERRED pending verified AS2000 reference.
+Preserve the earlier blank-LCD checkpoint and all XIRQ timing/coverage limits.
 
 ## One narrow task
 
-Investigate the existing wrong-character-ROM TODO and the gap between decoded
-ASCII LCD bus text and actual rendered LCD pixels. Establish the current AS2000
-LCD device/CGROM selection and whether locally available CGROM evidence permits
-identifying a concrete rendering mismatch. Use existing private assets only;
-never publish ROMs, dumps, firmware disassembly or proprietary glyph tables.
-
-Authorized: source inspection, opt-in bounded diagnostics and factual documentation
-in docs/as2k/LCD_RENDERING.md. Capture rendered output for the established
-`az09=+` sequence and compare its character codes/device mapping with the bus
-trace. Keep private captures outside Git. Do not alter CPU/video cores, CGROM,
-banking, keyboard, wake timing or the existing workflow/trace format. Describe
-any evidence-backed minimum correction as a follow-up, not an implementation.
+Promote the already validated AS2000 K/Z uppercase, + and Send mappings from
+scripts/as2k_apply_input_fixes.py into src/mame/skeleton/alphasma.cpp.
+The production input block still has lowercase K/Z duplicates, underscore in
+the + slot and unused COL.7 bit 0x10. Do not rediscover the firmware mapping.
+Keep AlphaSmart Pro inputs unchanged. Make the helper safely accept the corrected
+state while still rejecting unexpected mappings; preserve diagnostic workflow
+behavior and trace format. No CPU/video core or peripheral changes.
 
 ## Pass criteria and local validation
 
-- Identify LCD configuration, selected ROM identifiers/hashes, ROM audit status
-  and the distinction between bus character values and rendered glyphs.
-- Obtain bounded runtime pixel evidence for v314's established input sequence
-  and correlate it with decoded LCD text; avoid premature input or observation.
-- State exactly what is and is not provable without a verified hardware CGROM
-  or reference display. A warning/TODO alone is not a demonstrated pixel defect.
-- Preserve the existing keyboard/LCD/F1/F8/NVRAM/restart-recall smoke gate.
-- Supply a reproducible bounded external local validator. Expensive builds and
-  runtime tests belong to LOCAL, never REVIEW. Run git diff --check.
+- Production AS2000 mappings match the established helper corrections exactly.
+- Helper accepts both the legacy input block and corrected block, is idempotent,
+  and rejects unexpected mappings; use cheap focused fixture checks.
+- Bounded LOCAL production runtime demonstrates lowercase/uppercase K and Z,
+  = and + via natural keyboard with idle-gated observation. Verify Send's
+  COL.7 bit 0x10 transition via explicit input; do not claim host transfer works.
+- Preserve CI-instrumented keyboard/LCD/F1/F8/NVRAM/restart smoke and the
+  six-character pixel consistency gate. Keep private artifacts outside Git.
+- Build/validate production and diagnostic variants in LOCAL only. Supply a
+  bounded external validator; REVIEW performs no build or long runtime test.
+- Document production versus diagnostic coverage, run git diff --check, and
+  update CODEX_RESULT.md. Commit/push only accepted redistributable changes to
+  origin/as2k-mame0289-dev after all gates pass.
 
-If no defensible correction can be established, document OPEN/DEFERRED with
-missing evidence and move on after at most three attempts without material
-progress. Do not block the emulator effort on unavailable hardware reference.
-Update CODEX_RESULT.md. On accepted REVIEW, commit only redistributable changes,
-push only origin/as2k-mame0289-dev, select one next narrow task and write PREPARE
-to the external automation decision file.
+Stop on the first unexplained regression. After at most three attempts without
+material progress apply the user's OPEN/DEFERRED rule and select one different
+narrow unresolved task. Never invent a speculative hardware correction.

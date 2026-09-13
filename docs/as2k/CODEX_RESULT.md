@@ -1,55 +1,48 @@
 # AS2000 REVIEW result — PASS
 
-Date: 2026-09-12. Branch as2k-mame0289-dev; reviewed parent b1f08e607ec.
-Read AGENTS.md, current task, diff/status, history, mandatory private evidence,
-concise validation summary, local validator and targeted private trace context.
+Date: 2026-09-12. Branch as2k-mame0289-dev; reviewed parent 925fc32f878.
+Read AGENTS.md, task, status/diff, canonical private evidence, concise LOCAL
+summary, validator, checker and targeted source/snapshot differences.
 
-Local summary 2026-09-12T18:04:09-06:00 exited 0; artifacts are external
-state/as2k-validation.4Rf2NAKT. The earlier failed debugger attachment is
-superseded by the successful Lua-installed capture plus explicit soft reset.
+LOCAL summary 2026-09-12T18:56:08-06:00 exited 0; private artifacts:
+external state/as2k-validation.DjV21oOB. Both BIOS audits report one ROM set OK,
+best available, with F05 NEEDS REDUMP on both controllers. Selected F05 hash
+and LCD configuration are documented in LCD_RENDERING.md.
 
-Both BIOSes produced one $0001 read at INIT=$00, returning $FF:
-v314 instruction/access PC $87C6/$87C8; v308 $87D1/$87D3.
-Private instruction context and write markers establish immediate transfer of
-that value to TFLG1, then idle STOP at $87D7/$87E2 with CCR=$40.
-Caller/context and reproducible capture method are in REGISTER_0001.md.
-No observable emulator defect attributable to the read was demonstrated.
-No production correction is justified; hardware value remains OPEN/DEFERRED.
+LOCAL commands: python3 scripts/as2k_test_hc11_stop_xirq.py (nine checks);
+focused make -j3 SUBTARGET=as2kdiag SOURCES=src/mame/skeleton/alphasma.cpp
+REGENIE=1 USE_QTDEBUG=0 and ./as2kdiag -validate for production and diagnostic
+variants; -verifyroms for v314/v308; bounded v314 input/recall; pixel checker.
+Exact commands remain in external state/as2k-local-validator.sh.
+Input completed at 20 emulated seconds, recall at 5. Keyboard az09=+, F1/F8,
+saved NVRAM and restart recall passed. Bus codes 61 7A 30 39 3D 2B matched all
+240 glyph pixels from the selected F05 asset on the 240 x 36 rendered screen.
 
-LOCAL commands/gates passed: python3 scripts/as2k_test_hc11_stop_xirq.py
-(nine checks); focused make -j3 SUBTARGET=as2kdiag
-SOURCES=src/mame/skeleton/alphasma.cpp REGENIE=1 USE_QTDEBUG=0 and
-./as2kdiag -validate for production and CI-instrumented variants; both BIOS
-ROM audits and bounded 15-second register captures; baseline v314 keyboard
-az09=+, F1/F8, decoded LCD text, saved NVRAM and restart recall of memory8.
-Exact runtime commands are in external state/as2k-local-validator.sh.
+Limits: runtime uses CI instrumentation plus established input corrections;
+production was built/validated/audited, not runtime smoke-tested. Six glyphs
+prove selected-ROM consistency only, not physical AS2000 correctness or the
+whole charset. Hardware charset remains OPEN/DEFERRED pending verified CGROM
+or reference display. No production correction is justified by this task.
+No exhaustive RAM coverage, new firmware-backed unmasked XIRQ evidence or
+physical wake source/period measurement. Synthetic 148 core cycles are not
+new firmware auto-off evidence. Canonical idle PC agrees; prior private blank
+LCD and candidate-core notes remain earlier checkpoints, distinct from the
+published fixes and this later successful observation. No evidence is erased.
 
-Limits: soft-reset attachment does not prove initial cold-reset coverage;
-no exhaustive firmware paths, RAM-bank/address coverage or CGROM pixel check.
-Smoke coverage is v314 only. CGROM NEEDS REDUMP persists. No physical reserved-
-register value, physical XIRQ source/period or firmware-backed unmasked XIRQ
-was established. Synthetic 1.25 s timing remains diagnostic only.
-Canonical idle PC/CCR agrees. Preserve the checkpoint discrepancy between the
-private blank-LCD/candidate-core notes and the prior published PASS; this new
-smoke PASS corroborates the later result without rewriting older evidence.
+REVIEW cheap checks: snapshot comparison (only driver differs, explained by
+existing input helper/CI instrumentation; checker and other non-document
+tracked files match), Python syntax, external validator bash -n, git diff
+--check. No build, MAME launch, polling or complete validation-log read.
 
-Files: REGISTER_0001.md, opt-in scripts/as2k_register_0001.cmd, this report,
-and CODEX_NEXT.md. No production source, core, workflow or trace-format change.
-Next narrow task: LCD rendered-character evidence, retaining bus/pixel limits.
-REVIEW runs only cheap static checks; no make, rebuild, MAME launch, polling or
-complete large-log read. No private artifacts are staged.
-
-Cheap REVIEW checks passed: external validator bash -n, git diff --check,
-and byte comparison of the diagnostic/core/workflow/harness with the tested
-snapshot. git pull --ff-only origin as2k-mame0289-dev was already up to date.
+Files changed: LCD_RENDERING.md, scripts/as2k_check_lcd_pixels.py, this report
+and CODEX_NEXT.md. No production/core/workflow changes or private artifacts.
+Next task: promote established diagnostic input corrections into production
+and validate production input behavior without rediscovering closed mappings.
 
 Final git status --short before staging/publication:
 ```
  M docs/as2k/CODEX_NEXT.md
  M docs/as2k/CODEX_RESULT.md
-?? docs/as2k/REGISTER_0001.md
-?? scripts/as2k_register_0001.cmd
+?? docs/as2k/LCD_RENDERING.md
+?? scripts/as2k_check_lcd_pixels.py
 ```
-The reviewed diagnostics/documentation and next-task handoff are authorized for
-commit/push to origin/as2k-mame0289-dev; automation proceeds with PREPARE only
-after successful publication.
