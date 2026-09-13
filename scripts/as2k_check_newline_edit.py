@@ -9,6 +9,15 @@ from as2k_decode_trace import Controller, parse_events
 # saved F1 begins 61 62 0D 63 64. B5 is a bus marker, not ASCII or
 # a claim about its physical glyph. Compare cells without decoder substitution.
 CHECKPOINTS = {
+    # Join/resplit across controllers: proposed firmware behavior, await LOCAL.
+    'boundary': (('newline1', ('ab\xb5', '', '', '')),
+                 ('newline2', ('ab\xb5', 'cd\xb5', '', '')),
+                 ('final', ('ab\xb5', 'cd\xb5', 'ef', '')),
+                 ('join', ('ab\xb5', 'cdef', '', '')),
+                 ('resplit', ('ab\xb5', 'cd\xb5', 'ef', '')),
+                 ('switch', ('ab\xb5', 'cd\xb5', 'ef', ''))),
+    'boundary_recall': (('restart', ('ab\xb5', 'cd\xb5', 'ef', '')),
+                        ('switch', ('ab\xb5', 'cd\xb5', 'ef', ''))),
     # Proposed firmware expectations: await LOCAL, not physical LCD evidence.
     'three': (('newline1', ('ab\xb5', '', '', '')),
               ('newline2', ('ab\xb5', 'cd\xb5', '', '')),

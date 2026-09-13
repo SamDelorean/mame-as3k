@@ -49,7 +49,7 @@ class EditGateTest(unittest.TestCase):
                              ('ab\xb5', 'cd', 'ef', '')):
                     with self.subTest(phase=phase, name=name, rows=rows), self.assertRaises(AssertionError):
                         check(fixture(phase, {name: rows}), phase)
-        for phase in ('three', 'three_recall'):
+        for phase in ('three', 'three_recall', 'boundary', 'boundary_recall'):
             good = fixture(phase)
             with self.assertRaises(AssertionError):
                 check([s for s in good if ' e=2 ' not in s], phase)
@@ -60,6 +60,34 @@ class EditGateTest(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 check([s.replace('observe ' + phase + ' switch',
                                  'observe ' + phase + ' final') for s in good], phase)
+
+    def test_boundary_join_resplit_and_recall(self):
+        for name, rows in (
+                ('join', ('ab\xb5', 'cd\xb5', 'ef', '')),  # ignored
+                ('join', ('ab\xb5', 'cdf', '', '')),  # wrong deletion
+                ('join', ('ab\xb5', 'cdef', 'ef', '')),  # stale third row
+                ('join', ('ab\xb5', '', 'cdef', '')),  # wrong controller
+                ('join', ('ab\xb5', 'cdef', '', 'ef')),  # wrong row
+                ('resplit', ('ab\xb5', 'cdef', '', '')),
+                ('resplit', ('ab\xb5', 'cd\xb5', '', 'ef')),
+                ('switch', ('ab\xb5', 'cdef', '', ''))):
+            with self.subTest(name=name, rows=rows), self.assertRaises(AssertionError):
+                check(fixture('boundary', {name: rows}), 'boundary')
+        for name in ('restart', 'switch'):
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                check(fixture('boundary_recall', {name: ('ab\xb5', 'cdef', '', '')}),
+                      'boundary_recall')
+        for phase in ('boundary', 'boundary_recall'):
+            good = fixture(phase)
+            for fragment in (' e=2 ', ' e=2 rs=1 '):
+                with self.subTest(phase=phase, fragment=fragment), self.assertRaises(AssertionError):
+                    check([s for s in good if fragment not in s], phase)
+            with self.assertRaises(AssertionError):
+                check([s.replace('nibble=C ', 'nibble=8 ') for s in good], phase)
+        good = fixture('boundary')
+        with self.assertRaises(AssertionError):
+            check([s.replace('observe boundary join', 'observe boundary resplit')
+                   for s in good], 'boundary')
 
     def test_wrong_edit_content(self):
         for name, wrong in (('split', ('ab\xb5', 'd')), ('split', ('abcd', '')),
@@ -115,7 +143,7 @@ class EditGateTest(unittest.TestCase):
 
     def test_traversal_missing_or_unordered_evidence(self):
         for phase in ('traverse', 'traverse_recall', 'vertical', 'vertical_recall',
-                      'three', 'three_recall'):
+                      'three', 'three_recall', 'boundary', 'boundary_recall'):
             good = fixture(phase)
             for fragment in ('AS2KTRACE LCD', 'AS2KTRACE KEY', 'complete',
                              'observe ' + phase + ' switch'):

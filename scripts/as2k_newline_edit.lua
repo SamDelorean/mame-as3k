@@ -4,7 +4,8 @@ local phase = assert(os.getenv('AS2K_NEWLINE_PHASE'))
 assert(phase == 'write' or phase == 'recall'
     or phase == 'traverse' or phase == 'traverse_recall'
     or phase == 'vertical' or phase == 'vertical_recall'
-    or phase == 'three' or phase == 'three_recall')
+    or phase == 'three' or phase == 'three_recall'
+    or phase == 'boundary' or phase == 'boundary_recall')
 local cpu = assert(manager.machine.devices[':maincpu'])
 local keyboard = manager.machine.natkeyboard
 local steps = {}
@@ -14,7 +15,7 @@ local function physical(port, mask, name)
 end
 local function observe(s) steps[#steps + 1] = {observe = s} end
 key('{F1}')
-if phase == 'three' then
+if phase == 'three' or phase == 'boundary' then
     key('ab')
     physical(':COL.9', 0x40, 'Return')
     observe('newline1')
@@ -23,6 +24,15 @@ if phase == 'three' then
     observe('newline2')
     key('ef')
     observe('final')
+    if phase == 'boundary' then
+        -- Proposed firmware behavior across controllers; await LOCAL evidence.
+        physical(':COL.5', 0x80) -- Left
+        physical(':COL.5', 0x80) -- cd<CR>|ef
+        physical(':COL.9', 0x01, 'Delete') -- Backspace: cd|ef
+        observe('join')
+        physical(':COL.9', 0x40, 'Return')
+        observe('resplit')
+    end
 elseif phase == 'write' or phase == 'traverse' or phase == 'vertical' then
     key('abcd')
     observe('original')
