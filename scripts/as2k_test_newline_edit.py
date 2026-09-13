@@ -50,7 +50,7 @@ class EditGateTest(unittest.TestCase):
                     with self.subTest(phase=phase, name=name, rows=rows), self.assertRaises(AssertionError):
                         check(fixture(phase, {name: rows}), phase)
         for phase in ('three', 'three_recall', 'boundary', 'boundary_recall',
-                      'four', 'four_recall'):
+                      'four', 'four_recall', 'five', 'five_recall'):
             good = fixture(phase)
             with self.assertRaises(AssertionError):
                 check([s for s in good if ' e=2 ' not in s], phase)
@@ -61,6 +61,33 @@ class EditGateTest(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 check([s.replace('observe ' + phase + ' switch',
                                  'observe ' + phase + ' final') for s in good], phase)
+
+    def test_five_scroll_and_recall(self):
+        for phase, names in (('five', ('newline4', 'fifth', 'switch')),
+                             ('five_recall', ('restart', 'switch'))):
+            for name in names:
+                wrong_rows = [
+                    ('ab\xb5', 'cd\xb5', 'ef\xb5', 'gh'),
+                    ('ab\xb5', 'cd\xb5', 'ef\xb5', 'gh\xb5'),
+                    ('cd\xb5', 'ef\xb5', 'gh\xb5', 'ik'),
+                    ('cd\xb5', 'ij', 'gh\xb5', 'ef\xb5'),
+                    ('gh\xb5', 'ij', 'cd\xb5', 'ef\xb5'),
+                ]
+                if name != 'newline4':
+                    wrong_rows.append(('cd\xb5', 'ef\xb5', 'gh\xb5', ''))
+                else:
+                    wrong_rows.append(('cd\xb5', 'ef\xb5', 'gh\xb5', 'ij'))
+                for rows in wrong_rows:
+                    with self.subTest(phase=phase, name=name, rows=rows), self.assertRaises(AssertionError):
+                        check(fixture(phase, {name: rows}), phase)
+        # A display-shift command leaves raw DDRAM unchanged, but invalidates
+        # interpreting these raw rows as the viewport with the shared decoder.
+        good = fixture('five')
+        index = good.index('AS2KNEWLINE observe five newline4')
+        shift = [f'AS2KTRACE LCD pc=8000 e=1 rs=0 rw=0 nibble={n} matrixh=00 pd=00'
+                 for n in ('1', '8')]
+        with self.assertRaises(AssertionError):
+            check(good[:index] + shift + good[index:], 'five')
 
     def test_four_content_placement_and_stale_recall(self):
         for phase, names in (('four', ('final', 'switch')),
@@ -165,7 +192,7 @@ class EditGateTest(unittest.TestCase):
     def test_traversal_missing_or_unordered_evidence(self):
         for phase in ('traverse', 'traverse_recall', 'vertical', 'vertical_recall',
                       'three', 'three_recall', 'boundary', 'boundary_recall',
-                      'four', 'four_recall'):
+                      'four', 'four_recall', 'five', 'five_recall'):
             good = fixture(phase)
             for fragment in ('AS2KTRACE LCD', 'AS2KTRACE KEY', 'complete',
                              'observe ' + phase + ' switch'):

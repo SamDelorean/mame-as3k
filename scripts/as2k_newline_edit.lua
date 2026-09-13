@@ -6,7 +6,8 @@ assert(phase == 'write' or phase == 'recall'
     or phase == 'vertical' or phase == 'vertical_recall'
     or phase == 'three' or phase == 'three_recall'
     or phase == 'boundary' or phase == 'boundary_recall'
-    or phase == 'four' or phase == 'four_recall')
+    or phase == 'four' or phase == 'four_recall'
+    or phase == 'five' or phase == 'five_recall')
 local cpu = assert(manager.machine.devices[':maincpu'])
 local keyboard = manager.machine.natkeyboard
 local steps = {}
@@ -16,7 +17,7 @@ local function physical(port, mask, name)
 end
 local function observe(s) steps[#steps + 1] = {observe = s} end
 key('{F1}')
-if phase == 'three' or phase == 'boundary' or phase == 'four' then
+if phase == 'three' or phase == 'boundary' or phase == 'four' or phase == 'five' then
     key('ab')
     physical(':COL.9', 0x40, 'Return')
     observe('newline1')
@@ -24,13 +25,19 @@ if phase == 'three' or phase == 'boundary' or phase == 'four' then
     physical(':COL.9', 0x40, 'Return')
     observe('newline2')
     key('ef')
-    if phase == 'four' then
+    if phase == 'four' or phase == 'five' then
         -- Proposed fourth-row firmware expectations; await LOCAL evidence.
         physical(':COL.9', 0x40, 'Return')
         observe('newline3')
         key('gh')
     end
     observe('final')
+    if phase == 'five' then
+        physical(':COL.9', 0x40, 'Return')
+        observe('newline4')
+        key('ij')
+        observe('fifth')
+    end
     if phase == 'boundary' then
         -- Proposed firmware behavior across controllers; await LOCAL evidence.
         physical(':COL.5', 0x80) -- Left

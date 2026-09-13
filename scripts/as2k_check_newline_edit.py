@@ -54,16 +54,35 @@ CHECKPOINTS = {
 }
 
 
+# Fifth-line scroll and bottom-viewport recall are hypotheses awaiting LOCAL.
+# A mismatch reports exact observed rows before failing; never learn an
+# expectation from the same run or silently accept a different recall policy.
+CHECKPOINTS['five'] = CHECKPOINTS['four'][:4] + (
+    ('newline4', ('cd\xb5', 'ef\xb5', 'gh\xb5', '')),
+    ('fifth', ('cd\xb5', 'ef\xb5', 'gh\xb5', 'ij')),
+    ('switch', ('cd\xb5', 'ef\xb5', 'gh\xb5', 'ij')),
+)
+CHECKPOINTS['five_recall'] = (
+    ('restart', ('cd\xb5', 'ef\xb5', 'gh\xb5', 'ij')),
+    ('switch', ('cd\xb5', 'ef\xb5', 'gh\xb5', 'ij')),
+)
+
+
 def check(lines, phase):
     expected = CHECKPOINTS[phase]
     controllers = {1: Controller(1), 2: Controller(2)}
     seen, keys, writes = 0, 0, 0
     complete = False
+    shift_commands = []
     for line in lines:
         keys += 'AS2KTRACE KEY' in line
         for event in parse_events([line]):
             if event.e in controllers:
                 for byte in controllers[event.e].feed(event):
+                    if not byte.rw and not byte.rs and (
+                            0x18 <= byte.value <= 0x1f or
+                            byte.value in (0x05, 0x07)):
+                        shift_commands.append((event.e, byte.value))
                     writes += controllers[event.e].apply(byte)
         if 'AS2KNEWLINE observe ' in line:
             assert not complete and seen < len(expected), 'extra checkpoint'
@@ -72,6 +91,10 @@ def check(lines, phase):
             assert keys and writes, 'missing keyboard transitions or LCD writes since checkpoint'
             screen = tuple(bytes(controllers[e].ddram[a:a + 40])
                            for e in range(1, len(rows) // 2 + 1) for a in (0, 0x40))
+            if phase.startswith('five'):
+                print(f'OBSERVE {phase}/{name}: raw DDRAM={screen!r}; '
+                      f'shift commands since boot={shift_commands!r}', flush=True)
+                assert not shift_commands, 'display shift requires separate visible-screen analysis; raw DDRAM retained'
             assert all(c.display_on for c in controllers.values()), 'LCD disabled'
             assert screen == tuple(row.encode('latin-1').ljust(40, b' ') for row in rows), (phase, name, screen)
             print(f'PASS {phase}/{name}: rows={screen!r}')
