@@ -1,38 +1,38 @@
-# Current Codex task — promote established AS2000 input corrections
+# Current Codex task — F1–F8 file isolation and restart regression
 
 Date: 2026-09-12. Branch: as2k-mame0289-dev. Attempt 1.
-
 Read AGENTS.md and mandatory private AS2K_KNOWLEDGE.md first.
-LCD_RENDERING.md records accepted six-character bus/pixel consistency;
-physical charset accuracy is OPEN/DEFERRED pending verified AS2000 reference.
-Preserve the earlier blank-LCD checkpoint and all XIRQ timing/coverage limits.
+Production K/Z/+ and Send mappings are accepted. Preserve LCD_RENDERING.md,
+the earlier blank-LCD checkpoint and all existing XIRQ/charset coverage limits.
 
 ## One narrow task
 
-Promote the already validated AS2000 K/Z uppercase, + and Send mappings from
-scripts/as2k_apply_input_fixes.py into src/mame/skeleton/alphasma.cpp.
-The production input block still has lowercase K/Z duplicates, underscore in
-the + slot and unused COL.7 bit 0x10. Do not rediscover the firmware mapping.
-Keep AlphaSmart Pro inputs unchanged. Make the helper safely accept the corrected
-state while still rejecting unexpected mappings; preserve diagnostic workflow
-behavior and trace format. No CPU/video core or peripheral changes.
+Extend the current F1/F8 smoke to all eight firmware files: unique typed
+content must survive file switching and restart without cross-file corruption.
+Use the established fn_9486 bank mapping and ROM file bounds from the private
+evidence base; do not rediscover them. This closes a regression coverage gap,
+not a demonstrated emulator defect or exhaustive physical RAM/decode proof.
+Do not touch unrelated peripherals, CPU/video cores or speculate about hardware.
 
-## Pass criteria and local validation
+## Pass criteria and LOCAL validation
 
-- Production AS2000 mappings match the established helper corrections exactly.
-- Helper accepts both the legacy input block and corrected block, is idempotent,
-  and rejects unexpected mappings; use cheap focused fixture checks.
-- Bounded LOCAL production runtime demonstrates lowercase/uppercase K and Z,
-  = and + via natural keyboard with idle-gated observation. Verify Send's
-  COL.7 bit 0x10 transition via explicit input; do not claim host transfer works.
-- Preserve CI-instrumented keyboard/LCD/F1/F8/NVRAM/restart smoke and the
-  six-character pixel consistency gate. Keep private artifacts outside Git.
-- Build/validate production and diagnostic variants in LOCAL only. Supply a
-  bounded external validator; REVIEW performs no build or long runtime test.
-- Document production versus diagnostic coverage, run git diff --check, and
-  update CODEX_RESULT.md. Commit/push only accepted redistributable changes to
-  origin/as2k-mame0289-dev after all gates pass.
+- Add a reproducible bounded idle-gated F1–F8 typing/recall regression with
+  distinct per-file tokens, verify each file's content after switching away
+  and back, and verify all eight again after restart with persisted NVRAM.
+- Assert file-specific content and absence of other files' tokens in the
+  observed file; completion markers or a global NVRAM substring alone are
+  insufficient evidence of isolation. Use diagnostic LCD bus observations
+  and document precisely any production coverage provided.
+- Retain production kKzZ=+, explicit Send transition, diagnostic keyboard/LCD,
+  six-character pixel consistency and existing build/validation gates.
+- Keep all private ROMs, NVRAM, executables and logs outside Git; preserve CI
+  workflow and trace format. Provide an external bounded LOCAL validator.
+- Stop at the first unexplained regression; establish observation versus
+  emulator failure before any minimal source correction.
+- Update CODEX_RESULT.md with commands, values, files and evidence limits;
+  git diff --check must pass. REVIEW performs no build or long runtime.
+  Commit/push accepted redistributable changes only to origin/as2k-mame0289-dev.
 
-Stop on the first unexplained regression. After at most three attempts without
-material progress apply the user's OPEN/DEFERRED rule and select one different
-narrow unresolved task. Never invent a speculative hardware correction.
+After at most three attempts without materially new evidence or progress,
+apply the user's OPEN/DEFERRED rule and select one different narrow task.
+Do not claim exhaustive RAM-bank/address or physical ZPSD decode coverage.

@@ -2,9 +2,9 @@
 # license:BSD-3-Clause
 """Apply AS2000 input fixes validated against firmware v3.1.4 traces.
 
-This helper is intentionally separate from the production driver while the
-AS2000 work is still on the diagnostic branch. Every replacement is scoped to
-INPUT_PORTS_START(asma2k) and asserted so CI fails if upstream context changes.
+Production includes these corrections. Keep accepting legacy and corrected
+fields for the diagnostic workflow, rejecting missing, duplicate or unexpected
+character mappings. All replacements are scoped to INPUT_PORTS_START(asma2k).
 """
 from pathlib import Path
 
@@ -30,9 +30,15 @@ replacements = [
     ),
 ]
 
-for old, new in replacements:
-    count = block.count(old)
-    assert count == 1, f"expected exactly one AS2000 occurrence of {old!r}, found {count}"
+for (old, new), mask, gap in zip(replacements, ("0x04", "0x10", "0x40"), ("  ", " ", "  ")):
+    prefix = f"\tPORT_BIT({mask}, IP_ACTIVE_LOW, IPT_KEYBOARD) "
+    suffix = gap + "PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)"
+    key = old.split(" PORT_CHAR", 1)[0].rstrip()
+    old, new = prefix + old + suffix, prefix + new + suffix
+    fields = [line for line in block.splitlines() if key in line]
+    count = block.count(old) + block.count(new)
+    if len(fields) != 1 or count != 1 or fields[0] not in (old, new):
+        raise ValueError(f"unexpected AS2000 mapping for {key}: {fields!r}")
     block = block.replace(old, new, 1)
 
 # Firmware v3.1.4 scans keycode 0x47 as Send. Matrix encoding is
@@ -42,7 +48,9 @@ col7_end = block.index('PORT_START("COL.8")', col7_start)
 col7 = block[col7_start:col7_end]
 old_send = "\tPORT_BIT(0x10, IP_ACTIVE_LOW, IPT_UNUSED)"
 new_send = "\tPORT_BIT(0x10, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_F12) PORT_NAME(\"Send\") PORT_CHAR(UCHAR_MAMEKEY(F12)) PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)"
-assert col7.count(old_send) == 1, "expected one unused AS2000 COL.7 bit 0x10 field"
+fields = [line for line in col7.splitlines() if "PORT_BIT(0x10," in line]
+if fields not in ([old_send], [new_send]):
+    raise ValueError(f"unexpected AS2000 COL.7 bit 0x10 mapping: {fields!r}")
 col7 = col7.replace(old_send, new_send, 1)
 block = block[:col7_start] + col7 + block[col7_end:]
 
