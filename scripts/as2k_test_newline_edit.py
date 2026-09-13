@@ -23,10 +23,11 @@ def fixture(phase, replacements=None):
     for name, rows in CHECKPOINTS[phase]:
         rows = (replacements or {}).get(name, rows)
         lines.append('AS2KTRACE KEY fixture')
-        for address, token in zip((0x80, 0xc0), rows):
-            byte(1, 0, address)
+        for row, token in enumerate(rows):
+            e, address = row // 2 + 1, (0x80, 0xc0)[row % 2]
+            byte(e, 0, address)
             for c in token.ljust(40):
-                byte(1, 1, ord(c))
+                byte(e, 1, ord(c))
         lines.append(f'AS2KNEWLINE observe {phase} {name}')
     lines.append(f'AS2KNEWLINE complete {phase}')
     return lines
@@ -36,6 +37,29 @@ class EditGateTest(unittest.TestCase):
     def test_valid_write_and_restart(self):
         for phase in CHECKPOINTS:
             self.assertEqual(check(fixture(phase), phase), len(CHECKPOINTS[phase]))
+
+    def test_three_wrong_controller_content_and_recall(self):
+        for phase, names in (('three', ('final', 'switch')),
+                             ('three_recall', ('restart', 'switch'))):
+            for name in names:
+                for rows in (('ab\xb5', 'cd\xb5', '', ''),
+                             ('ab\xb5', 'cd\xb5', 'eg', ''),
+                             ('ab\xb5', 'cd\xb5', '', 'ef'),
+                             ('ab\xb5', 'cd\xb5', 'ef', 'x'),
+                             ('ab\xb5', 'cd', 'ef', '')):
+                    with self.subTest(phase=phase, name=name, rows=rows), self.assertRaises(AssertionError):
+                        check(fixture(phase, {name: rows}), phase)
+        for phase in ('three', 'three_recall'):
+            good = fixture(phase)
+            with self.assertRaises(AssertionError):
+                check([s for s in good if ' e=2 ' not in s], phase)
+            with self.assertRaises(AssertionError):
+                check([s for s in good if ' e=2 rs=1 ' not in s], phase)
+            with self.assertRaises(AssertionError):
+                check([s.replace('nibble=C ', 'nibble=8 ') for s in good], phase)
+            with self.assertRaises(AssertionError):
+                check([s.replace('observe ' + phase + ' switch',
+                                 'observe ' + phase + ' final') for s in good], phase)
 
     def test_wrong_edit_content(self):
         for name, wrong in (('split', ('ab\xb5', 'd')), ('split', ('abcd', '')),
@@ -90,7 +114,8 @@ class EditGateTest(unittest.TestCase):
                    for s in fixture('vertical')], 'vertical')
 
     def test_traversal_missing_or_unordered_evidence(self):
-        for phase in ('traverse', 'traverse_recall', 'vertical', 'vertical_recall'):
+        for phase in ('traverse', 'traverse_recall', 'vertical', 'vertical_recall',
+                      'three', 'three_recall'):
             good = fixture(phase)
             for fragment in ('AS2KTRACE LCD', 'AS2KTRACE KEY', 'complete',
                              'observe ' + phase + ' switch'):

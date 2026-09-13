@@ -9,6 +9,13 @@ from as2k_decode_trace import Controller, parse_events
 # saved F1 begins 61 62 0D 63 64. B5 is a bus marker, not ASCII or
 # a claim about its physical glyph. Compare cells without decoder substitution.
 CHECKPOINTS = {
+    # Proposed firmware expectations: await LOCAL, not physical LCD evidence.
+    'three': (('newline1', ('ab\xb5', '', '', '')),
+              ('newline2', ('ab\xb5', 'cd\xb5', '', '')),
+              ('final', ('ab\xb5', 'cd\xb5', 'ef', '')),
+              ('switch', ('ab\xb5', 'cd\xb5', 'ef', ''))),
+    'three_recall': (('restart', ('ab\xb5', 'cd\xb5', 'ef', '')),
+                     ('switch', ('ab\xb5', 'cd\xb5', 'ef', ''))),
     'write': (('original', ('abcd', '')), ('split', ('ab\xb5', 'cd')),
               ('join', ('abcd', '')), ('resplit', ('ab\xb5', 'cd')),
               ('switch', ('ab\xb5', 'cd'))),
@@ -46,10 +53,11 @@ def check(lines, phase):
             name, rows = expected[seen]
             assert line.strip().endswith(f'AS2KNEWLINE observe {phase} {name}'), 'checkpoint order/phase'
             assert keys and writes, 'missing keyboard transitions or LCD writes since checkpoint'
-            screen = tuple(bytes(controllers[1].ddram[a:a + 40]) for a in (0, 0x40))
+            screen = tuple(bytes(controllers[e].ddram[a:a + 40])
+                           for e in range(1, len(rows) // 2 + 1) for a in (0, 0x40))
             assert all(c.display_on for c in controllers.values()), 'LCD disabled'
             assert screen == tuple(row.encode('latin-1').ljust(40, b' ') for row in rows), (phase, name, screen)
-            print(f'PASS {phase}/{name}: rows={screen[:2]!r}')
+            print(f'PASS {phase}/{name}: rows={screen!r}')
             seen += 1
             keys = writes = 0
         if 'AS2KNEWLINE complete ' in line:
@@ -63,4 +71,4 @@ def check(lines, phase):
 if __name__ == '__main__':
     with open(sys.argv[1]) as log:
         count = check(log, sys.argv[2])
-    print(f'PASS newline edit {sys.argv[2]}: {count} ordered exact two-row 40-column checkpoints')
+    print(f'PASS newline edit {sys.argv[2]}: {count} ordered exact 40-column checkpoints')
