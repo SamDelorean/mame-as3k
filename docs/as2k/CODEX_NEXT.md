@@ -1,41 +1,44 @@
-# Current Codex task — fourth-row entry and recall
+# Current Codex task — fifth-line scrolling and recall
 
 Date: 2026-09-13. Branch: as2k-mame0289-dev. Attempt 1.
 Read AGENTS.md and mandatory private AS2K_KNOWLEDGE.md first.
-Third-line join/resplit and recall accepted in LOCAL KeEi5rma.
+Fourth-row entry/recall accepted in LOCAL 3oLxC3fU.
 Preserve established findings; do not rediscover closed behavior.
 
 ## One narrow task
 
-Cover explicit-newline entry into the fourth LCD row and persisted recall.
+Observe and gate the first vertical scroll when entering a fifth explicit line.
 This is an unresolved coverage gap, not a demonstrated emulator defect.
 Use fresh private NVRAM, ordinary asma2k input and established idle gating.
-Exclude fifth-line entry, wrapping, scrolling and unrelated peripherals.
+Enter ab, Return, cd, Return, ef, Return, gh, Return, ij.
+Exclude automatic wrapping, sixth-line entry and unrelated peripherals.
 
 ## Pass criteria and LOCAL validation
 
-- Enter ab, Return, cd, Return, ef, Return, gh.
-- Require ordered exact raw four-row DDRAM checkpoints after each Return:
-  ab<B5> / blank / blank / blank;
-  ab<B5> / cd<B5> / blank / blank;
-  ab<B5> / cd<B5> / ef<B5> / blank.
-- Require final ab<B5> / cd<B5> / ef<B5> / gh, each row padded to 40 cells.
-  These are proposed firmware expectations, not physical hardware facts.
-- Require the same final rows after F2/F1 and separate-process saved-NVRAM
-  recall, including another F2/F1.
+- Preserve the accepted four-row checkpoints through gh.
+- Capture ordered exact all-four-row raw DDRAM after the fourth Return and ij.
+  Proposed viewport: cd<B5> / ef<B5> / gh<B5> / blank, then
+  cd<B5> / ef<B5> / gh<B5> / ij, each padded to 40 cells.
+  These are hypotheses, not established firmware or physical hardware facts.
+- Observe F2/F1 and separate-process saved-NVRAM recall including another F2/F1.
+  Determine the firmware viewport restoration policy from retained evidence;
+  do not assume recall preserves the viewport or change expectations silently.
 - Require keyboard transitions, ordered LCD writes, both displays enabled,
-  exact all-four-row content and completion. Substrings alone are insufficient.
-  Reuse raw B5 checks; preserve shared decoder and workflow/trace format.
-- Add ROM-free negative fixtures rejecting missing/wrong fourth-row text,
-  stale third-row marker, wrong controller/row placement, stale recall and
-  missing/unordered evidence. On mismatch retain traces and distinguish
-  observation, input and firmware behavior before attributing an emulator bug.
-- Extend bounded external LOCAL validator, retaining boundary join/resplit,
-  three-line entry/recall, vertical/horizontal traversal, newline/join,
-  interior editing, all-eight-file isolation/restart, production kKzZ=+, Send,
-  diagnostic keyboard/LCD, six-character pixels, input fixtures, HC11 harness,
-  focused production/diagnostic builds, -validate and both BIOS audits.
-  Stop on first unexplained regression. Do not modify CPU/video cores.
+  exact four-row content and completion. Substrings alone are insufficient.
+- Check whether display-shift commands affect viewport interpretation; the
+  shared decoder does not model shifts. Distinguish raw DDRAM from visible
+  screen evidence, using existing pixel observations if necessary. Preserve
+  the shared decoder and workflow/trace format unless a separate task warrants
+  changing them. On mismatch retain traces and distinguish observation, input
+  and firmware behavior before attributing an emulator bug.
+- Add ROM-free negative fixtures for stale/unscrolled rows, missing/wrong ij,
+  row/controller placement, stale recall and missing/unordered evidence.
+- Extend bounded external LOCAL validator while retaining fourth-row entry,
+  boundary join/resplit, three-line entry/recall, vertical/horizontal traversal,
+  newline/join, interior editing, all-eight-file isolation/restart, production
+  kKzZ=+, Send, diagnostic keyboard/LCD, six-character pixels, input fixtures,
+  HC11 harness, both focused builds, -validate and both BIOS audits.
+  Stop at first unexplained regression. Do not modify CPU/video cores.
 - REVIEW runs no builds or long runtime. Record commands, observations, limits,
   changed files and final status in CODEX_RESULT.md; require git diff --check.
   Commit only validated redistributable changes; push origin/as2k-mame0289-dev.
