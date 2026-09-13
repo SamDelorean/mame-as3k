@@ -50,7 +50,7 @@ class EditGateTest(unittest.TestCase):
                     with self.subTest(phase=phase, name=name, rows=rows), self.assertRaises(AssertionError):
                         check(fixture(phase, {name: rows}), phase)
         for phase in ('three', 'three_recall', 'boundary', 'boundary_recall',
-                      'four', 'four_recall', 'five', 'five_recall'):
+                      'four', 'four_recall', 'five', 'five_recall', 'upscroll', 'upscroll_recall'):
             good = fixture(phase)
             with self.assertRaises(AssertionError):
                 check([s for s in good if ' e=2 ' not in s], phase)
@@ -88,6 +88,31 @@ class EditGateTest(unittest.TestCase):
                  for n in ('1', '8')]
         with self.assertRaises(AssertionError):
             check(good[:index] + shift + good[index:], 'five')
+
+    def test_upscroll_content_and_recall(self):
+        for phase, names in (('upscroll', ('up4', 'insert', 'switch')),
+                             ('upscroll_recall', ('restart', 'switch'))):
+            for name in names:
+                for rows in (('cd\xb5', 'ef\xb5', 'gh\xb5', 'ij'),
+                             ('', 'cd\xb5', 'ef\xb5', 'gh\xb5'),
+                             ('xab\xb5', 'cd\xb5', 'ef\xb5', 'gh\xb5'),
+                             ('axb\xb5', 'cd\xb5', 'ef\xb5', 'gh\xb5'),
+                             ('ef\xb5', 'gh\xb5', 'abx\xb5', 'cd\xb5'),
+                             ('abx\xb5', 'ef\xb5', 'cd\xb5', 'gh\xb5')):
+                    with self.subTest(phase=phase, name=name, rows=rows), self.assertRaises(AssertionError):
+                        check(fixture(phase, {name: rows}), phase)
+                if name != 'up4':
+                    with self.assertRaises(AssertionError):
+                        check(fixture(phase, {name: ('ab\xb5', 'cd\xb5', 'ef\xb5', 'gh\xb5')}), phase)
+        good = fixture('upscroll')
+        with self.assertRaises(AssertionError):
+            check([s.replace('observe upscroll up2', 'observe upscroll up3') for s in good], 'upscroll')
+        for command in (0x18, 0x07):
+            index = good.index('AS2KNEWLINE observe upscroll up1')
+            shift = [f'AS2KTRACE LCD pc=8000 e=1 rs=0 rw=0 nibble={n:X} matrixh=00 pd=00'
+                     for n in (command >> 4, command & 15)]
+            with self.assertRaises(AssertionError):
+                check(good[:index] + shift + good[index:], 'upscroll')
 
     def test_four_content_placement_and_stale_recall(self):
         for phase, names in (('four', ('final', 'switch')),
@@ -192,7 +217,7 @@ class EditGateTest(unittest.TestCase):
     def test_traversal_missing_or_unordered_evidence(self):
         for phase in ('traverse', 'traverse_recall', 'vertical', 'vertical_recall',
                       'three', 'three_recall', 'boundary', 'boundary_recall',
-                      'four', 'four_recall', 'five', 'five_recall'):
+                      'four', 'four_recall', 'five', 'five_recall', 'upscroll', 'upscroll_recall'):
             good = fixture(phase)
             for fragment in ('AS2KTRACE LCD', 'AS2KTRACE KEY', 'complete',
                              'observe ' + phase + ' switch'):

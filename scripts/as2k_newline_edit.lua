@@ -7,7 +7,8 @@ assert(phase == 'write' or phase == 'recall'
     or phase == 'three' or phase == 'three_recall'
     or phase == 'boundary' or phase == 'boundary_recall'
     or phase == 'four' or phase == 'four_recall'
-    or phase == 'five' or phase == 'five_recall')
+    or phase == 'five' or phase == 'five_recall'
+    or phase == 'upscroll' or phase == 'upscroll_recall')
 local cpu = assert(manager.machine.devices[':maincpu'])
 local keyboard = manager.machine.natkeyboard
 local steps = {}
@@ -17,7 +18,7 @@ local function physical(port, mask, name)
 end
 local function observe(s) steps[#steps + 1] = {observe = s} end
 key('{F1}')
-if phase == 'three' or phase == 'boundary' or phase == 'four' or phase == 'five' then
+if phase == 'three' or phase == 'boundary' or phase == 'four' or phase == 'five' or phase == 'upscroll' then
     key('ab')
     physical(':COL.9', 0x40, 'Return')
     observe('newline1')
@@ -25,18 +26,26 @@ if phase == 'three' or phase == 'boundary' or phase == 'four' or phase == 'five'
     physical(':COL.9', 0x40, 'Return')
     observe('newline2')
     key('ef')
-    if phase == 'four' or phase == 'five' then
+    if phase == 'four' or phase == 'five' or phase == 'upscroll' then
         -- Proposed fourth-row firmware expectations; await LOCAL evidence.
         physical(':COL.9', 0x40, 'Return')
         observe('newline3')
         key('gh')
     end
     observe('final')
-    if phase == 'five' then
+    if phase == 'five' or phase == 'upscroll' then
         physical(':COL.9', 0x40, 'Return')
         observe('newline4')
         key('ij')
         observe('fifth')
+    end
+    if phase == 'upscroll' then
+        for n = 1, 4 do
+            physical(':COL.7', 0x80) -- Up, ordinary AS2000 input
+            observe('up' .. n)
+        end
+        key('x')
+        observe('insert')
     end
     if phase == 'boundary' then
         -- Proposed firmware behavior across controllers; await LOCAL evidence.

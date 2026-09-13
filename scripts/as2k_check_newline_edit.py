@@ -68,6 +68,24 @@ CHECKPOINTS['five_recall'] = (
 )
 
 
+# Preregistered hypotheses, NOT accepted observations: Up 1-3 retain the
+# bottom viewport; Up 4 reveals line 1 at column 2. File switching/restart
+# are proposed to preserve that top viewport. LOCAL must establish policy;
+# mismatch rows/logs are retained for attribution, never auto-learned.
+CHECKPOINTS['upscroll'] = CHECKPOINTS['five'][:-1] + (
+    ('up1', ('cd\xb5', 'ef\xb5', 'gh\xb5', 'ij')),
+    ('up2', ('cd\xb5', 'ef\xb5', 'gh\xb5', 'ij')),
+    ('up3', ('cd\xb5', 'ef\xb5', 'gh\xb5', 'ij')),
+    ('up4', ('ab\xb5', 'cd\xb5', 'ef\xb5', 'gh\xb5')),
+    ('insert', ('abx\xb5', 'cd\xb5', 'ef\xb5', 'gh\xb5')),
+    ('switch', ('abx\xb5', 'cd\xb5', 'ef\xb5', 'gh\xb5')),
+)
+CHECKPOINTS['upscroll_recall'] = (
+    ('restart', ('abx\xb5', 'cd\xb5', 'ef\xb5', 'gh\xb5')),
+    ('switch', ('abx\xb5', 'cd\xb5', 'ef\xb5', 'gh\xb5')),
+)
+
+
 def check(lines, phase):
     expected = CHECKPOINTS[phase]
     controllers = {1: Controller(1), 2: Controller(2)}
@@ -83,7 +101,10 @@ def check(lines, phase):
                             0x18 <= byte.value <= 0x1f or
                             byte.value in (0x05, 0x07)):
                         shift_commands.append((event.e, byte.value))
-                    writes += controllers[event.e].apply(byte)
+                    changed = controllers[event.e].apply(byte)
+                    # Up may only set the cursor address; require bus writes,
+                    # not a text rewrite, while still comparing all DDRAM cells.
+                    writes += (not byte.rw) if phase.startswith('upscroll') else changed
         if 'AS2KNEWLINE observe ' in line:
             assert not complete and seen < len(expected), 'extra checkpoint'
             name, rows = expected[seen]
@@ -91,7 +112,7 @@ def check(lines, phase):
             assert keys and writes, 'missing keyboard transitions or LCD writes since checkpoint'
             screen = tuple(bytes(controllers[e].ddram[a:a + 40])
                            for e in range(1, len(rows) // 2 + 1) for a in (0, 0x40))
-            if phase.startswith('five'):
+            if phase.startswith(('five', 'upscroll')):
                 print(f'OBSERVE {phase}/{name}: raw DDRAM={screen!r}; '
                       f'shift commands since boot={shift_commands!r}', flush=True)
                 assert not shift_commands, 'display shift requires separate visible-screen analysis; raw DDRAM retained'
