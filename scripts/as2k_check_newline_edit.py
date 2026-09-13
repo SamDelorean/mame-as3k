@@ -12,6 +12,13 @@ CHECKPOINTS = {
     'write': (('original', ('abcd', '')), ('split', ('ab\xb5', 'cd')),
               ('join', ('abcd', '')), ('resplit', ('ab\xb5', 'cd')),
               ('switch', ('ab\xb5', 'cd'))),
+    # Traversal is a proposed firmware expectation pending LOCAL evidence.
+    'traverse': (('original', ('abcd', '')), ('split', ('ab\xb5', 'cd')),
+                 ('left_insert', ('abx\xb5', 'cd')),
+                 ('right_insert', ('abx\xb5', 'ycd')),
+                 ('switch', ('abx\xb5', 'ycd'))),
+    'traverse_recall': (('restart', ('abx\xb5', 'ycd')),
+                        ('switch', ('abx\xb5', 'ycd'))),
     'recall': (('restart', ('ab\xb5', 'cd')), ('switch', ('ab\xb5', 'cd'))),
 }
 

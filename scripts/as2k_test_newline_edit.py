@@ -50,6 +50,36 @@ class EditGateTest(unittest.TestCase):
         with self.assertRaises(AssertionError):
             check(fixture('recall', {'restart': ('abcd', '')}), 'recall')
 
+    def test_traversal_wrong_boundary_or_overwrite(self):
+        for name, wrong in (
+                ('left_insert', ('ab\xb5', 'xcd')),
+                ('left_insert', ('axb\xb5', 'cd')),
+                ('left_insert', ('abx', 'cd')),
+                ('right_insert', ('abxy\xb5', 'cd')),
+                ('right_insert', ('abx\xb5', 'cyd')),
+                ('right_insert', ('abx\xb5', 'yd')),
+                ('switch', ('abx\xb5', 'cd'))):
+            with self.subTest(name=name, wrong=wrong), self.assertRaises(AssertionError):
+                check(fixture('traverse', {name: wrong}), 'traverse')
+        for name in ('restart', 'switch'):
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                check(fixture('traverse_recall', {name: ('ab\xb5', 'cd')}),
+                      'traverse_recall')
+
+    def test_traversal_missing_or_unordered_evidence(self):
+        for phase in ('traverse', 'traverse_recall'):
+            good = fixture(phase)
+            for fragment in ('AS2KTRACE LCD', 'AS2KTRACE KEY', 'complete',
+                             'observe ' + phase + ' switch'):
+                with self.subTest(phase=phase, fragment=fragment), self.assertRaises(AssertionError):
+                    check([line for line in good if fragment not in line], phase)
+            with self.assertRaises(AssertionError):
+                check(good + [f'AS2KNEWLINE complete {phase}'], phase)
+        with self.assertRaises(AssertionError):
+            check([s.replace('observe traverse left_insert',
+                             'observe traverse right_insert')
+                   for s in fixture('traverse')], 'traverse')
+
     def test_missing_evidence(self):
         good = fixture('write')
         for fragment in ('AS2KTRACE LCD', 'AS2KTRACE KEY', 'observe write split', 'complete'):

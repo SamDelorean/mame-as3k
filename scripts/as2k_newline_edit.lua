@@ -1,7 +1,8 @@
 -- license:BSD-3-Clause
 -- v3.1.4: fresh private NVRAM for write, persisted NVRAM for recall.
 local phase = assert(os.getenv('AS2K_NEWLINE_PHASE'))
-assert(phase == 'write' or phase == 'recall')
+assert(phase == 'write' or phase == 'recall'
+    or phase == 'traverse' or phase == 'traverse_recall')
 local cpu = assert(manager.machine.devices[':maincpu'])
 local keyboard = manager.machine.natkeyboard
 local steps = {}
@@ -11,7 +12,7 @@ local function physical(port, mask, name)
 end
 local function observe(s) steps[#steps + 1] = {observe = s} end
 key('{F1}')
-if phase == 'write' then
+if phase == 'write' or phase == 'traverse' then
     key('abcd')
     observe('original')
     -- Use the asma2k input block, not the AlphaSmart Pro block.
@@ -19,10 +20,20 @@ if phase == 'write' then
     physical(':COL.5', 0x80) -- ab|cd
     physical(':COL.9', 0x40, 'Return') -- ab / |cd
     observe('split')
-    physical(':COL.9', 0x01, 'Delete') -- Backspace joins: ab|cd
-    observe('join')
-    physical(':COL.9', 0x40, 'Return')
-    observe('resplit')
+    if phase == 'traverse' then
+        -- Boundary expectations, not independently verified physical behavior.
+        physical(':COL.5', 0x80) -- expected ab|<CR>cd
+        key('x')
+        observe('left_insert')
+        physical(':COL.6', 0x80) -- expected abx<CR>|cd
+        key('y')
+        observe('right_insert')
+    else
+        physical(':COL.9', 0x01, 'Delete') -- Backspace joins: ab|cd
+        observe('join')
+        physical(':COL.9', 0x40, 'Return')
+        observe('resplit')
+    end
 else
     observe('restart')
 end
