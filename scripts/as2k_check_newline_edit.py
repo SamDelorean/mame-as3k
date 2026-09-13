@@ -12,13 +12,20 @@ CHECKPOINTS = {
     'write': (('original', ('abcd', '')), ('split', ('ab\xb5', 'cd')),
               ('join', ('abcd', '')), ('resplit', ('ab\xb5', 'cd')),
               ('switch', ('ab\xb5', 'cd'))),
-    # Traversal is a proposed firmware expectation pending LOCAL evidence.
+    # Left/Right traversal accepted in LOCAL Ifdikbk6.
     'traverse': (('original', ('abcd', '')), ('split', ('ab\xb5', 'cd')),
                  ('left_insert', ('abx\xb5', 'cd')),
                  ('right_insert', ('abx\xb5', 'ycd')),
                  ('switch', ('abx\xb5', 'ycd'))),
     'traverse_recall': (('restart', ('abx\xb5', 'ycd')),
                         ('switch', ('abx\xb5', 'ycd'))),
+    # Up/Down expectations await LOCAL; not verified physical behavior.
+    'vertical': (('original', ('abcd', '')), ('split', ('ab\xb5', 'cd')),
+                 ('up_insert', ('xab\xb5', 'cd')),
+                 ('down_insert', ('xab\xb5', 'cyd')),
+                 ('switch', ('xab\xb5', 'cyd'))),
+    'vertical_recall': (('restart', ('xab\xb5', 'cyd')),
+                        ('switch', ('xab\xb5', 'cyd'))),
     'recall': (('restart', ('ab\xb5', 'cd')), ('switch', ('ab\xb5', 'cd'))),
 }
 

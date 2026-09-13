@@ -2,7 +2,8 @@
 -- v3.1.4: fresh private NVRAM for write, persisted NVRAM for recall.
 local phase = assert(os.getenv('AS2K_NEWLINE_PHASE'))
 assert(phase == 'write' or phase == 'recall'
-    or phase == 'traverse' or phase == 'traverse_recall')
+    or phase == 'traverse' or phase == 'traverse_recall'
+    or phase == 'vertical' or phase == 'vertical_recall')
 local cpu = assert(manager.machine.devices[':maincpu'])
 local keyboard = manager.machine.natkeyboard
 local steps = {}
@@ -12,7 +13,7 @@ local function physical(port, mask, name)
 end
 local function observe(s) steps[#steps + 1] = {observe = s} end
 key('{F1}')
-if phase == 'write' or phase == 'traverse' then
+if phase == 'write' or phase == 'traverse' or phase == 'vertical' then
     key('abcd')
     observe('original')
     -- Use the asma2k input block, not the AlphaSmart Pro block.
@@ -20,7 +21,15 @@ if phase == 'write' or phase == 'traverse' then
     physical(':COL.5', 0x80) -- ab|cd
     physical(':COL.9', 0x40, 'Return') -- ab / |cd
     observe('split')
-    if phase == 'traverse' then
+    if phase == 'vertical' then
+        -- Proposed firmware behavior; no wrapping, scrolling or clamping.
+        physical(':COL.7', 0x80) -- Up: expected |ab<CR>cd
+        key('x')
+        observe('up_insert')
+        physical(':COL.5', 0x02) -- Down: expected xab<CR>c|d
+        key('y')
+        observe('down_insert')
+    elseif phase == 'traverse' then
         -- Boundary expectations, not independently verified physical behavior.
         physical(':COL.5', 0x80) -- expected ab|<CR>cd
         key('x')

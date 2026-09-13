@@ -66,8 +66,31 @@ class EditGateTest(unittest.TestCase):
                 check(fixture('traverse_recall', {name: ('ab\xb5', 'cd')}),
                       'traverse_recall')
 
+    def test_vertical_ignored_horizontal_or_overwrite(self):
+        for name, wrong in (
+                ('up_insert', ('ab\xb5', 'xcd')),  # ignored Up
+                ('up_insert', ('abx\xb5', 'cd')),  # horizontal Left
+                ('up_insert', ('ab\xb5', 'cxd')),  # horizontal Right
+                ('up_insert', ('xb\xb5', 'cd')),   # overwrite
+                ('down_insert', ('xyab\xb5', 'cd')),  # ignored Down
+                ('down_insert', ('yxab\xb5', 'cd')),  # horizontal Left
+                ('down_insert', ('xayb\xb5', 'cd')),  # horizontal Right
+                ('down_insert', ('xab\xb5', 'ycd')),  # wrong column
+                ('down_insert', ('xab\xb5', 'cy')),   # overwrite
+                ('switch', ('ab\xb5', 'cd'))):
+            with self.subTest(name=name, wrong=wrong), self.assertRaises(AssertionError):
+                check(fixture('vertical', {name: wrong}), 'vertical')
+        for name in ('restart', 'switch'):
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                check(fixture('vertical_recall', {name: ('xab\xb5', 'cd')}),
+                      'vertical_recall')
+        with self.assertRaises(AssertionError):
+            check([s.replace('observe vertical up_insert',
+                             'observe vertical down_insert')
+                   for s in fixture('vertical')], 'vertical')
+
     def test_traversal_missing_or_unordered_evidence(self):
-        for phase in ('traverse', 'traverse_recall'):
+        for phase in ('traverse', 'traverse_recall', 'vertical', 'vertical_recall'):
             good = fixture(phase)
             for fragment in ('AS2KTRACE LCD', 'AS2KTRACE KEY', 'complete',
                              'observe ' + phase + ' switch'):
