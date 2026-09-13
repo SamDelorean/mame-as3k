@@ -1,45 +1,45 @@
-# Current Codex task — newline insertion and Backspace line join
+# Current Codex task — cursor traversal across an explicit newline
 
 Date: 2026-09-12. Branch: as2k-mame0289-dev. Attempt 1.
 Read AGENTS.md and mandatory private AS2K_KNOWLEDGE.md first.
-Interior cursor insertion/backspace and restart coverage is accepted.
-Preserve established input, Send, XIRQ, bank and LCD_RENDERING.md limits,
-including the earlier blank-LCD checkpoint. Do not rediscover closed findings.
+Newline insertion, Backspace join, F2/F1 and separate-process recall are accepted.
+Preserve existing input, Send, XIRQ, banking and LCD_RENDERING.md limits,
+including the earlier blank-LCD checkpoint and unverified physical B5 glyph.
 
 ## One narrow task
 
-Add bounded diagnostic coverage for inserting Return within a short F1 token
-and using Backspace at the start of the second line to join it again.
-This is a coverage gap, not a demonstrated emulator defect. Keep content
-within two visible rows, avoiding wrapping, scrolling and unrelated peripherals.
-Use the asma2k input definitions and established idle gating.
+Add bounded diagnostic coverage for Left/Right traversal across an explicit
+newline in F1. This is an unresolved coverage gap, not a demonstrated defect.
+Use fresh private NVRAM, asma2k input definitions and established idle gating.
+Keep two short visible rows; exclude wrapping, scrolling and other peripherals.
 
 ## Pass criteria and LOCAL validation
 
-- Fresh private NVRAM: type abcd; Left twice; Return. Assert exact visible
-  rows ab and cd (space padded), distinguishing newline insertion from overwrite.
-- At the start of the second line, Backspace must restore abcd on row 0
-  and clear row 1. Require ordered LCD bus observations and key transitions.
-- Insert Return again; verify the two-line content after F2/F1 and in a
-  separate process using saved NVRAM. Establish/document firmware newline
-  representation from these bounded observations if needed; do not guess
-  decoder semantics. Completion or NVRAM substrings alone are insufficient.
-- Retain accepted interior-edit, all-eight-file isolation/restart, production
-  kKzZ=+, Send, diagnostic keyboard/LCD, six-character pixel, input fixture,
-  HC11 harness, focused build, -validate and BIOS audit gates.
-- Extend external bounded LOCAL validator. Keep proprietary/local artifacts
-  outside Git. Preserve workflow/trace format and CPU/video cores.
-- Stop at the first unexplained regression; distinguish input/observation
-  limitations from emulator defects before proposing a minimal correction.
-- Update CODEX_RESULT.md with commands, observations, limits, files and status;
-  git diff --check must pass. REVIEW performs no build or long runtime.
-  Commit/push validated redistributable changes only to origin/as2k-mame0289-dev.
+- Establish ab<CR>cd using the accepted split sequence, with cursor before c.
+  Require exact raw DDRAM rows ab<B5> and cd, space padded to 40 cells.
+- Left once then insert x. Test the expected boundary behavior: abx<B5> / cd.
+  This is a test expectation, not independently verified physical behavior.
+- Right once then insert y. Test traversal over the newline: abx<B5> / ycd.
+  Distinguish crossing the newline from motion within a row or overwriting text.
+- Verify final exact two-row content after F2/F1 and in a separate process
+  using saved NVRAM. Require ordered LCD writes and keyboard transitions;
+  completion or NVRAM substrings alone are insufficient.
+- Reuse raw B5 comparisons without changing shared decoder semantics.
+  On unexpected behavior, preserve traces and distinguish input/observation
+  limitations and firmware semantics from an emulator defect before changing code.
+- Retain newline/join, interior-edit, all-eight-file isolation/restart,
+  production kKzZ=+, Send, diagnostic keyboard/LCD, six-character pixel,
+  input fixture, HC11 harness, focused build, -validate and BIOS audit gates.
+- Extend the external bounded LOCAL validator. Preserve workflow/trace format;
+  do not modify CPU/video cores or add proprietary/local artifacts to Git.
+- Stop at the first unexplained regression. REVIEW performs no build or long
+  runtime. Record commands, observations, limits, changed files and status in
+  CODEX_RESULT.md; require git diff --check before publishing validated changes
+  only to origin/as2k-mame0289-dev.
 
-Workspace note: preceding REVIEW found unrelated malformed local bytes in
-src/devices/machine/gpl_renderer.h absent from git status --short, differing
-from HEAD and LOCAL snapshot. Do not include it in this task's publication.
-
-No exhaustive editing, RAM/decode or physical LCD claim. After at most three
-attempts without materially new evidence/progress, mark OPEN/DEFERRED with
-missing evidence and choose one different narrow task unless a demonstrated
+Workspace note: unrelated malformed local gpl_renderer.h bytes remain excluded;
+the LOCAL validator substitutes its committed version in the disposable snapshot.
+No exhaustive editing, RAM/decode, physical display or timing claim.
+After at most three attempts without new evidence/progress, mark OPEN/DEFERRED,
+record missing evidence and select one different task unless a demonstrated
 blocking defect warrants continuation.
