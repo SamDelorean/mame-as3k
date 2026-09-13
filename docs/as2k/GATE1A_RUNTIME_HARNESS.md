@@ -15,6 +15,10 @@ The runtime capture must distinguish retained behavior from IrDA behavior:
 
 Do not model IR removal by disabling the HC11 timer block or bypassing the keyboard matrix. The retained contract still includes keyboard IRQ assertion/clear behavior, `$2000/$9000` keyboard MMIO, PA6 I/O/RAM view selection, PA4-PA5 banking, Macintosh/ADB capture/compare timing, PORTD bits 0-1, and PORTA bits 0 and 2. PA7 remains unproven as reusable GPIO.
 
-The firmware repository now carries a debugger command file and trace classifier so execution evidence can be reviewed reproducibly. A trace-level PASS does not by itself prove complete host-side keyboard emulation; if that external behavior is not yet modeled, report the result as a partial runtime pass rather than treating Send as removed or irrelevant.
+The firmware repository carries `tools/mame_gate1a.cmd` and `tools/check_mame_gate1a_trace.py`. MAME 0.289 supports the `trace <file>,,<flags>` form and combined `noloop|logerror` flags used by the command file, allowing breakpoint markers to appear in the trace log.
+
+The classifier is intentionally fail-closed for the default `full` profile. A trace does not PASS merely because IrDA addresses are absent: it must positively observe `$9716`, `$8606`, `$ABC9`, and at least one patched Print callsite (`$962D` or `$9804`). Narrow `send`, `print`, and `safety` profiles are diagnostic only and cannot close the complete gate by themselves.
+
+A trace-level PASS does not by itself prove complete host-side keyboard emulation; if that external behavior is not yet modeled, report the result as a partial runtime pass rather than treating Send as removed or irrelevant.
 
 No DynFS behavior is part of this emulator gate.
