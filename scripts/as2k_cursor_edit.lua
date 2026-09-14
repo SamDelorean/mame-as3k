@@ -1,0 +1,67 @@
+-- license:BSD-3-Clause
+-- v3.1.4: fresh private NVRAM for write, persisted NVRAM for recall.
+local phase = assert(os.getenv('AS2K_EDIT_PHASE'))
+assert(phase == 'write' or phase == 'recall')
+local cpu = assert(manager.machine.devices[':maincpu'])
+local keyboard = manager.machine.natkeyboard
+local steps = {}
+local function key(s) steps[#steps + 1] = {key = s} end
+local function physical(port, mask, name)
+    steps[#steps + 1] = {port = port, mask = mask, name = name}
+end
+local function observe(s) steps[#steps + 1] = {observe = s} end
+key('{F1}')
+if phase == 'write' then
+    key('abcd')
+    observe('original')
+    -- Use the asma2k input block, not the AlphaSmart Pro block.
+    physical(':COL.5', 0x80)
+    physical(':COL.5', 0x80) -- ab|cd
+    key('x')      -- abx|cd: insertion must retain cd
+    observe('insert')
+    physical(':COL.9', 0x01, 'Delete') -- Backspace: ab|cd
+    observe('backspace')
+    key('y')      -- aby|cd: final persisted edit
+    observe('final')
+else
+    observe('restart')
+end
+key('{F2}')
+key('{F1}')
+observe('switch')
+local step, idle = 1, 0
+local held, frames
+emu.register_frame_done(function()
+    if held then
+        frames = frames + 1
+        if frames == 5 then
+            held:set_value(0)
+            held:clear_value()
+            held = nil
+        end
+        return
+    end
+    if cpu.state['PC'].value == 0x87d7 and keyboard.empty then
+        idle = idle + 1
+    else idle = 0 end
+    if idle < 60 then return end
+    idle = 0
+    local action = steps[step]
+    if not action then
+        manager.machine:logerror('AS2KEDIT complete ' .. phase)
+        print('AS2KEDIT complete ' .. phase)
+        manager.machine:exit()
+    elseif action.key then
+        keyboard:post_coded(action.key)
+    elseif action.port then
+        held = assert(manager.machine.ioport.ports[action.port]:field(action.mask))
+        assert(held.mask == action.mask and #held:keyboard_codes(0) > 0
+            and (not action.name or held.name == action.name),
+            'unexpected AS2000 editing key field')
+        held:set_value(1)
+        frames = 0
+    else
+        manager.machine:logerror('AS2KEDIT observe ' .. phase .. ' ' .. action.observe)
+    end
+    step = step + 1
+end, 'frame')

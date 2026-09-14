@@ -1,0 +1,133 @@
+name: AS2000 diagnostic build
+
+on:
+  push:
+    branches:
+      - as2k-mame0289-dev
+    paths:
+      - '.github/workflows/as2k-diagnostic.yml'
+      - 'scripts/as2k_apply_input_fixes.py'
+      - 'scripts/as2k_apply_xirq_timer_test.py'
+      - 'scripts/as2k_test_hc11_stop_xirq.py'
+      - 'src/mame/skeleton/alphasma.cpp'
+      - 'src/devices/cpu/mc68hc11/**'
+      - 'src/devices/video/hd44780.*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-as2k:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@main
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev libsdl2-ttf-dev libfontconfig-dev libasound2-dev libxinerama-dev libxi-dev
+      - name: Apply validated AS2000 keyboard fixes
+        run: |
+          python3 scripts/as2k_apply_input_fixes.py
+          git diff --check
+          grep -F "PORT_CHAR('k') PORT_CHAR('K')" src/mame/skeleton/alphasma.cpp
+          grep -F "PORT_CHAR('z')  PORT_CHAR('Z')" src/mame/skeleton/alphasma.cpp
+          grep -F "PORT_CHAR('=') PORT_CHAR('+')" src/mame/skeleton/alphasma.cpp
+          grep -F 'PORT_NAME("Send")' src/mame/skeleton/alphasma.cpp
+      # STOP/XIRQ wake handling is in the production MC68HC11 core.
+      - name: Check HC11 STOP XIRQ control flow
+        run: python3 scripts/as2k_test_hc11_stop_xirq.py
+      - name: Instrument AS2000 control paths
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/mame/skeleton/alphasma.cpp')
+          s = p.read_text()
+
+          old = '\tvoid lcd_ctrl_w(uint8_t data);\n\tvirtual void port_a_w(uint8_t data) override;'
+          new = '\tvoid zpsd_pmr_w(uint8_t data);\n\tvoid lcd_ctrl_w(uint8_t data);\n\tvirtual void port_a_w(uint8_t data) override;'
+          assert old in s
+          s = s.replace(old, new, 1)
+
+          old = 'INPUT_CHANGED_MEMBER(alphasmart_state::kb_irq)\n{\n\t// IRQ on every key transition\n\tm_maincpu->set_input_line(MC68HC11_IRQ_LINE, ASSERT_LINE);\n}'
+          new = '''INPUT_CHANGED_MEMBER(alphasmart_state::kb_irq)\n{\n\t// IRQ on every key transition\n\tlogerror("AS2KTRACE KEY pc=%04X old=%u new=%u param=%u\\n", unsigned(m_maincpu->pc()), unsigned(oldval), unsigned(newval), unsigned(param));\n\tm_maincpu->set_input_line(MC68HC11_IRQ_LINE, ASSERT_LINE);\n}'''
+          assert old in s
+          s = s.replace(old, new, 1)
+
+          old = 'void asma2k_state::lcd_ctrl_w(uint8_t data)\n{\n\tuint8_t changed = (m_lcd_ctrl ^ data) & data;'
+          new = '''void asma2k_state::zpsd_pmr_w(uint8_t data)\n{\n\tlogerror("AS2KTRACE PMR pc=%04X data=%02X pa=%02X\\n", unsigned(m_maincpu->pc()), data, m_port_a);\n}\n\nvoid asma2k_state::lcd_ctrl_w(uint8_t data)\n{\n\tuint8_t changed = (m_lcd_ctrl ^ data) & data;\n\tlogerror("AS2KTRACE CTRL pc=%04X old=%02X new=%02X pa=%02X rise=%02X dict=%u\\n", unsigned(m_maincpu->pc()), m_lcd_ctrl, data, m_port_a, changed, unsigned((m_port_a & 0x30) >> 3 | (data & 0x80) >> 7));\n\tif (changed & 0x03)\n\t\tlogerror("AS2KTRACE LCD pc=%04X e=%u rs=%u rw=%u nibble=%X matrixh=%02X pd=%02X\\n", unsigned(m_maincpu->pc()), unsigned(changed & 0x03), unsigned(BIT(m_matrix[1], 1)), unsigned(BIT(m_matrix[1], 2)), unsigned((m_port_d >> 2) & 0x0f), m_matrix[1], m_port_d);'''
+          assert old in s
+          s = s.replace(old, new, 1)
+
+          old = 'void asma2k_state::port_a_w(uint8_t data)\n{\n\tm_io_view.select(BIT(data, 6));'
+          new = '''void asma2k_state::port_a_w(uint8_t data)\n{\n\tlogerror("AS2KTRACE PA pc=%04X old=%02X new=%02X view=%u ram=%u dict=%u\\n", unsigned(m_maincpu->pc()), m_port_a, data, unsigned(BIT(data, 6)), unsigned((data >> 4) & 0x03), unsigned((data & 0x30) >> 3 | (m_lcd_ctrl & 0x80) >> 7));\n\tm_io_view.select(BIT(data, 6));'''
+          assert old in s
+          s = s.replace(old, new, 1)
+
+          old = '\tm_io_view[0](0x2000, 0x2000).rw(FUNC(asma2k_state::kb_r), FUNC(asma2k_state::kb_matrixh_w));\n\tm_io_view[0](0x4000, 0x4000).w(FUNC(asma2k_state::lcd_ctrl_w));'
+          new = '\tm_io_view[0](0x2000, 0x2000).rw(FUNC(asma2k_state::kb_r), FUNC(asma2k_state::kb_matrixh_w));\n\tm_io_view[0](0x3010, 0x3010).w(FUNC(asma2k_state::zpsd_pmr_w));\n\tm_io_view[0](0x4000, 0x4000).w(FUNC(asma2k_state::lcd_ctrl_w));'
+          assert old in s
+          s = s.replace(old, new, 1)
+
+          old = '\tm_dictbank->configure_entries(0, 8, memregion("spellcheck")->base(), 0x4000);\n\tm_dictbank->set_entry(0);'
+          new = '\tm_dictbank->configure_entries(0, 8, memregion("spellcheck")->base(), 0x4000);\n\tm_dictbank->set_entry(0);\n\tlogerror("AS2KTRACE START dict=0 trace=lcd-key-v2\\n");'
+          assert old in s
+          s = s.replace(old, new, 1)
+
+          p.write_text(s)
+          PY
+          git diff --check
+      - name: Build focused AlphaSmart target
+        run: make -j3 SUBTARGET=as2kdiag SOURCES=src/mame/skeleton/alphasma.cpp REGENIE=1 USE_QTDEBUG=0
+      - name: Validate target
+        run: ./as2kdiag -validate
+      - name: Assemble baseline diagnostic runtime
+        run: |
+          mkdir -p as2kdiag-runtime/lib
+          cp as2kdiag as2kdiag-runtime/
+          git diff -- src/mame/skeleton/alphasma.cpp src/devices/cpu/mc68hc11/mc68hc11.cpp > as2kdiag-runtime/instrumentation.patch
+          TTF_LIB="$(ldd ./as2kdiag | awk '$1 ~ /libSDL2_ttf/ {print $3; exit}')"
+          if [ -n "$TTF_LIB" ] && [ -f "$TTF_LIB" ]; then cp -L "$TTF_LIB" as2kdiag-runtime/lib/; fi
+          cat > as2kdiag-runtime/run-headless.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -e
+          HERE="$(cd "$(dirname "$0")" && pwd)"
+          export LD_LIBRARY_PATH="$HERE/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          exec "$HERE/as2kdiag" "$@"
+          EOF
+          chmod +x as2kdiag-runtime/run-headless.sh
+          ./as2kdiag-runtime/run-headless.sh -validate
+      - name: Add synthetic XIRQ auto-off experiment
+        run: |
+          python3 scripts/as2k_apply_xirq_timer_test.py
+          git diff --check
+          git diff -- src/mame/skeleton/alphasma.cpp
+      - name: Build XIRQ experiment variant
+        run: |
+          make -j3 SUBTARGET=as2kdiag SOURCES=src/mame/skeleton/alphasma.cpp REGENIE=1 USE_QTDEBUG=0
+          cp as2kdiag as2kdiag-xirq
+          ./as2kdiag-xirq -validate
+      - name: Assemble XIRQ experiment runtime
+        run: |
+          mkdir -p as2kdiag-xirq-runtime/lib
+          cp as2kdiag-xirq as2kdiag-xirq-runtime/
+          git diff -- src/mame/skeleton/alphasma.cpp src/devices/cpu/mc68hc11/mc68hc11.cpp > as2kdiag-xirq-runtime/instrumentation.patch
+          TTF_LIB="$(ldd ./as2kdiag-xirq | awk '$1 ~ /libSDL2_ttf/ {print $3; exit}')"
+          if [ -n "$TTF_LIB" ] && [ -f "$TTF_LIB" ]; then cp -L "$TTF_LIB" as2kdiag-xirq-runtime/lib/; fi
+          cat > as2kdiag-xirq-runtime/run-headless.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -e
+          HERE="$(cd "$(dirname "$0")" && pwd)"
+          export LD_LIBRARY_PATH="$HERE/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          exec "$HERE/as2kdiag-xirq" "$@"
+          EOF
+          chmod +x as2kdiag-xirq-runtime/run-headless.sh
+          ./as2kdiag-xirq-runtime/run-headless.sh -validate
+      - uses: actions/upload-artifact@main
+        with:
+          name: as2kdiag-trace-${{ github.sha }}
+          path: |
+            as2kdiag-runtime
+            as2kdiag-xirq-runtime
+          if-no-files-found: error
