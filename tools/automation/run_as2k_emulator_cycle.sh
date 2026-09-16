@@ -22,5 +22,9 @@ You are the unattended productive worker for the AlphaSmart 2000 MAME emulator r
 EOF
 )
 
-codex exec --full-auto "$PROMPT"
+codex exec \
+  --sandbox workspace-write \
+  -c 'approval_policy="never"' \
+  -C "$ROOT" \
+  "$PROMPT"
 printf '%s\n' "$(date -Is) cycle_exit=0 head=$(git rev-parse HEAD)" >> "$STATE/history.log"
