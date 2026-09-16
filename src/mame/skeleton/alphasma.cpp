@@ -92,6 +92,8 @@ protected:
 private:
 	void lcd_ctrl_w(uint8_t data);
 	virtual void port_a_w(uint8_t data) override;
+	void gate1a_pc_w(uint16_t pc);
+	void gate1a_probe_stop();
 
 	void asma2k_mem(address_map &map) ATTR_COLD;
 
@@ -99,6 +101,7 @@ private:
 	required_memory_bank m_dictbank;
 
 	uint8_t m_lcd_ctrl;
+	uint64_t m_gate1a_instruction_count = 0;
 };
 
 INPUT_CHANGED_MEMBER(alphasmart_state::kb_irq)
@@ -204,6 +207,39 @@ void asma2k_state::port_a_w(uint8_t data)
 	m_rambank->set_entry(((data>>4) & 0x03));
 	m_dictbank->set_entry((data & 0x30) >> 3 | (m_lcd_ctrl & 0x80) >> 7);
 	m_port_a = data;
+}
+
+void asma2k_state::gate1a_pc_w(uint16_t pc)
+{
+	++m_gate1a_instruction_count;
+
+	// Periodic proof that the callback is observing the live HC11 instruction stream.
+	if ((m_gate1a_instruction_count & 0x3ffff) == 0)
+		logerror("AS2K_GATE1A HEARTBEAT instructions=%llu\n", (unsigned long long)m_gate1a_instruction_count);
+
+	switch (pc)
+	{
+	case 0x9716: logerror("AS2K_GATE1A SEND_REDIRECT PC=%04X\n", pc); break;
+	case 0x8606: logerror("AS2K_GATE1A SEND_CABLE PC=%04X\n", pc); break;
+	case 0x962d: logerror("AS2K_GATE1A PRINT_DETACH_962D PC=%04X\n", pc); break;
+	case 0x9804: logerror("AS2K_GATE1A PRINT_DETACH_9804 PC=%04X\n", pc); break;
+	case 0xabc9: logerror("AS2K_GATE1A PRINT_FALLBACK PC=%04X\n", pc); break;
+	case 0xd2dc: logerror("AS2K_GATE1A FAIL_IR_SEND_D2DC PC=%04X\n", pc); break;
+	case 0xd099: logerror("AS2K_GATE1A FAIL_IR_SEND_D099 PC=%04X\n", pc); break;
+	case 0xd437: logerror("AS2K_GATE1A FAIL_IR_PRINT_D437 PC=%04X\n", pc); break;
+	case 0xd488: logerror("AS2K_GATE1A RETAINED_SHARED_HELPER PC=%04X\n", pc); break;
+	default: break;
+	}
+
+	if ((pc >= 0xd098 && pc <= 0xd487) ||
+		(pc >= 0xd499 && pc <= 0xd517) ||
+		(pc >= 0xe104 && pc <= 0xffbf))
+	{
+		logerror("AS2K_GATE1A FORBIDDEN_PC=%04X\n", pc);
+	}
+
+	if (pc >= 0xe102 && pc <= 0xe103)
+		logerror("AS2K_GATE1A PROTECTED_METADATA_PC=%04X\n", pc);
 }
 
 
@@ -552,6 +588,15 @@ void asma2k_state::machine_start()
 
 	m_dictbank->configure_entries(0, 8, memregion("spellcheck")->base(), 0x4000);
 	m_dictbank->set_entry(0);
+	save_item(NAME(m_gate1a_instruction_count));
+	machine().add_notifier(MACHINE_NOTIFY_EXIT, machine_notify_delegate(&asma2k_state::gate1a_probe_stop, this));
+	logerror("AS2K_GATE1A PROBE_ACTIVE forbidden=D098-D487,D499-D517,E104-FFBF protected=E102-E103\n");
+}
+
+void asma2k_state::gate1a_probe_stop()
+{
+	logerror("AS2K_GATE1A PROBE_STOP instructions=%llu\n",
+		(unsigned long long)m_gate1a_instruction_count);
 }
 
 void alphasmart_state::machine_reset()
@@ -597,6 +642,7 @@ void asma2k_state::asma2k(machine_config &config)
 {
 	alphasmart(config);
 	m_maincpu->set_addrmap(AS_PROGRAM, &asma2k_state::asma2k_mem);
+	m_maincpu->instruction_callback().set(FUNC(asma2k_state::gate1a_pc_w));
 }
 
 // MCU: MC68HC11D0P
