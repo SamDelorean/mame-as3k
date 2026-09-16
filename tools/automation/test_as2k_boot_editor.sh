@@ -9,6 +9,8 @@ set -u
 ROOT="${AS2K_EMU_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null)}"
 MAME="${AS2K_DIAG_BIN:-$ROOT/as2kdiag}"
 ROM="${AS2K_ROM:-$HOME/Projects/alphasmart/private/roms/as2k/AS2000_v3.1.4.bin}"
+CGROM_ZIP_DIR="${AS2K_CGROM_ZIP_DIR:-$HOME/Projects/alphasmart/private/cgrom}"
+CGROM_RAW_DIR="${AS2K_CGROM_RAW_DIR:-$HOME/Projects/alphasmart/private/roms/ks0066}"
 MACHINE="${AS2K_MACHINE:-asma2k}"
 TIMEOUT_SEC="${AS2K_BOOT_TIMEOUT:-20}"
 EXPECTED_SHA1="e0b777dc68c671c31ba808e214fb9d2573b9a853"
@@ -25,6 +27,10 @@ if [[ ! -f "$ROM" ]]; then
   echo "BLOCKED private_rom_missing path=$ROM"
   exit 20
 fi
+if [[ ! -f "$CGROM_ZIP_DIR/ks0066.zip" && ! -f "$CGROM_RAW_DIR/ks0066_f05.bin" ]]; then
+  echo "BLOCKED ks0066_missing checked=$CGROM_ZIP_DIR/ks0066.zip,$CGROM_RAW_DIR/ks0066_f05.bin"
+  exit 20
+fi
 command -v sha1sum >/dev/null 2>&1 || { echo "BLOCKED sha1sum_missing"; exit 20; }
 command -v timeout >/dev/null 2>&1 || { echo "BLOCKED timeout_missing"; exit 20; }
 
@@ -33,6 +39,10 @@ if [[ "$actual_sha1" != "$EXPECTED_SHA1" ]]; then
   echo "BLOCKED wrong_rom_sha1 actual=$actual_sha1 expected=$EXPECTED_SHA1"
   exit 20
 fi
+
+# Known t640 private layout. Keep all three roots because MAME may resolve the
+# machine archive and the KS0066 device ROM through different directory forms.
+ROMPATH="$(dirname "$ROM");$CGROM_ZIP_DIR;$CGROM_RAW_DIR"
 
 state_base="${XDG_STATE_HOME:-$HOME/.local/state}/as2k-emulator-automation/boot-editor"
 mkdir -p "$state_base"
@@ -44,7 +54,7 @@ log="$run_dir/error.log"
 # observation marker. Mere process survival or ROM boot is not enough.
 set +e
 timeout "$TIMEOUT_SEC" "$MAME" "$MACHINE" \
-  -rompath "$(dirname "$ROM")" \
+  -rompath "$ROMPATH" \
   -window -skip_gameinfo -nothrottle -seconds_to_run "$TIMEOUT_SEC" \
   -verbose >"$log" 2>&1
 rc=$?
@@ -53,6 +63,11 @@ set -e
 if grep -Eq 'AS2K_AUTOMATION.*(EDITOR_READY|INPUT_START)|AS2K_GATE1A.*(EDITOR_READY|INPUT_START)' "$log"; then
   echo "VALIDATED BOOT_EDITOR marker=$(grep -E 'AS2K_AUTOMATION.*(EDITOR_READY|INPUT_START)|AS2K_GATE1A.*(EDITOR_READY|INPUT_START)' "$log" | head -n 1)"
   exit 0
+fi
+
+if grep -q 'ks0066_f05.bin NOT FOUND' "$log"; then
+  echo "BLOCKED BOOT_EDITOR ks0066_not_resolved rompath=$ROMPATH log=$log"
+  exit 20
 fi
 
 # A timeout is normal for an emulated machine that keeps running; without a
