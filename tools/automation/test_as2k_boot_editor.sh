@@ -49,19 +49,27 @@ mkdir -p "$state_base"
 run_dir="$(mktemp -d "$state_base/run.XXXXXX")" || { echo "BLOCKED mktemp_failed"; exit 20; }
 log="$run_dir/error.log"
 
-# This first harness deliberately uses existing diagnostic PC instrumentation only.
-# A usable editor is accepted only if the run demonstrates the known editor/input
-# observation marker. Mere process survival or ROM boot is not enough.
+# Editor readiness is established by the measured AS2000 idle criterion used
+# successfully by the automated editor exercise: 60 consecutive frames at
+# firmware idle/STOP PC $87D7 with the natural-keyboard queue empty.
+probe="$run_dir/editor_ready.lua"
+cp /tmp/as2k_editor_ready.lua "$probe"
+
 set +e
-timeout "$TIMEOUT_SEC" "$MAME" "$MACHINE" \
-  -rompath "$ROMPATH" \
-  -window -skip_gameinfo -nothrottle -seconds_to_run "$TIMEOUT_SEC" \
-  -verbose >"$log" 2>&1
+(
+  cd "$run_dir"
+  timeout "$TIMEOUT_SEC" "$MAME" "$MACHINE" \
+    -rompath "$ROMPATH" \
+    -autoboot_script "$probe" \
+    -video none -sound none -skip_gameinfo -nothrottle -log \
+    -seconds_to_run "$TIMEOUT_SEC" >/dev/null 2>&1
+)
 rc=$?
 set -e
+log="$run_dir/error.log"
 
-if grep -Eq 'AS2K_AUTOMATION.*(EDITOR_READY|INPUT_START)|AS2K_GATE1A.*(EDITOR_READY|INPUT_START)' "$log"; then
-  echo "VALIDATED BOOT_EDITOR marker=$(grep -E 'AS2K_AUTOMATION.*(EDITOR_READY|INPUT_START)|AS2K_GATE1A.*(EDITOR_READY|INPUT_START)' "$log" | head -n 1)"
+if grep -q 'AS2K_GATE1A EDITOR_READY' "$log"; then
+  echo "VALIDATED BOOT_EDITOR marker=$(grep 'AS2K_GATE1A EDITOR_READY' "$log" | head -n 1)"
   exit 0
 fi
 

@@ -34,10 +34,14 @@ log="$run_dir/error.log"
 ranked="$run_dir/ranked-pcs.txt"
 
 set +e
-timeout "$TIMEOUT_SEC" "$MAME" "$MACHINE" \
-  -rompath "$ROMPATH" -window -skip_gameinfo -nothrottle \
-  -seconds_to_run "$TIMEOUT_SEC" >"$log" 2>&1
+(
+  cd "$run_dir"
+  timeout "$TIMEOUT_SEC" "$MAME" "$MACHINE" \
+    -rompath "$ROMPATH" -window -skip_gameinfo -nothrottle -log \
+    -seconds_to_run "$TIMEOUT_SEC" >/dev/null 2>&1
+)
 rc=$?
+log="$run_dir/error.log"
 set -e
 
 samples="$(grep -c 'AS2K_EDITOR_SAMPLE PC=' "$log" 2>/dev/null || true)"
