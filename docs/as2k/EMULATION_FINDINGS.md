@@ -638,3 +638,22 @@ It does not by itself establish:
 - scrolling behavior
 - exhaustive editing correctness
 - hardware timing equivalence
+
+## Stock v3.1.4 normal matrix Send observation (2026-09-16)
+
+The reproducible `scripts/as2k_test_send_probe.py --runtime` probe selects the
+Send field directly by `:COL.7`, mask `0x10`, verifies its name and keyboard
+codes, and presses/releases it through MAME's ordinary input field API.
+With fresh NVRAM and the stock v3.1.4 SHA1 recorded above, it waits for 60 idle
+frames at `$87D7`, queues `a`, waits for idle again, then holds Send for five
+frames. Existing instruction instrumentation observed `$9716` then `$D2DC`
+after the press and before release. The probe completed normally; `$8606`
+was not observed. Two fresh runs reproduced this sequence.
+
+This is positive normal-input dispatch evidence for the stock editor's IrDA
+extension, consistent with the historical path distinction above. The existing
+instrumentation calls `$D2DC` `FAIL_IR_SEND_D2DC`; that label applies to the
+IR-detached contract, not to this stock-firmware expectation. No firmware or
+emulator change is justified by that marker alone. This probe does not establish
+LCD typing contents, electrical IRQ timing, wired transport, Print, or the
+IR-detached firmware gate. The KS0066 F05 NEEDS REDUMP limitation remains.
