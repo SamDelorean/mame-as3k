@@ -690,3 +690,11 @@ Stock AS2000 v3.1.4 ROM, SHA-1 `e0b777dc68c671c31ba808e214fb9d2573b9a853`.
 - Emulator contract: `PC Connected=ON` presents the attachment condition; `OFF` removes it. Firmware remains responsible for PC classification, ready state, disconnect debounce/state cleanup, and editor return.
 
 Next directed runtime gate: hold PA2=1, observe `$80C8 -> $A3AC -> $80D4` (preferably repeated `$80E5` with `$8E==$8F`), then inject Send only through the normal keyboard matrix/IRQ and require `$80EE -> $80F2 -> $8606`.
+
+## Directed PC Send validation (2026-09-17)
+
+A stock-ROM runtime test closed the next gate. PA2 alone reaches `$80D4`, but with PA0 low the PC loop takes `$80DA -> $814D` and does not reach the local keyboard queue consumer `$80E5`. Holding the host data-sense line PA0 high together with PA2 (`PORTA` logical idle `PA0=1, PA2=1`) preserves the PC service path through `$80E5`.
+
+With PA0+PA2 high, the stock ROM produced one `$80C8` PC entry, then repeatedly cycled through `$80D4` and `$80E5`. Send was then pressed and released through the existing MAME `COL.7`/`Send` input field, which uses the normal keyboard IRQ path. The observed causal path was `$80EE -> $80F2 -> $8606`; each marker occurred twice during the press/release test. No ROM/RAM write, forced PC, direct `$8606` call, or Send dispatcher patch was used.
+
+This validates normal wired Send dispatch from the stock firmware once PC keyboard mode is established. It also refines the emulator host-line contract: PC attachment/service requires PA2 asserted and PA0 held at its idle-high level in the absence of host-to-AlphaSmart traffic. The next gate is the `$8606` wired document stream into `$AA26`, followed by decoding the original keyboard transport into `salida.txt`.
