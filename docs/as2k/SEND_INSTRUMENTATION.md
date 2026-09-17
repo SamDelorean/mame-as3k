@@ -215,7 +215,7 @@ PC $80F5 while send_active:
     send_active = false
 ```
 
-For the eventual `salida.txt` sink, open/truncate on `$8606`, capture/decode only `$AA54` bytes while `send_active`, and flush/close on `$80F5`. Keep the raw-byte trace available alongside decoded text during development.
+For the eventual `send.txt` sink, open/truncate on `$8606`, capture/decode only `$AA54` bytes while `send_active`, and flush/close on `$80F5`. Keep the raw-byte trace available alongside decoded text during development.
 
 ## 8. Useful validation predictions
 

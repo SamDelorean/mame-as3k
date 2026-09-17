@@ -111,6 +111,7 @@ private:
 	uint8_t m_lcd_ctrl;
 	bool m_send_sink_active = false;
 	bool m_send_sink_break = false;
+	bool m_send_sink_shift = false;
 	FILE *m_send_sink = nullptr;
 	uint64_t m_gate1a_instruction_count = 0;
 };
@@ -226,34 +227,98 @@ void asma2k_state::send_sink_begin()
 {
 	if (m_send_sink)
 		std::fclose(m_send_sink);
-	m_send_sink = std::fopen("salida.txt", "wb");
+	m_send_sink = std::fopen("send.txt", "wb");
 	m_send_sink_active = m_send_sink != nullptr;
 	m_send_sink_break = false;
+	m_send_sink_shift = false;
 }
 
 void asma2k_state::send_sink_byte(uint8_t data)
 {
 	if (!m_send_sink_active)
 		return;
-	if (data == 0xf0) { m_send_sink_break = true; return; }
-	if (m_send_sink_break) { m_send_sink_break = false; return; }
-	char out = 0;
-	switch (data) {
-	case 0x1c: out='a'; break; case 0x32: out='b'; break; case 0x21: out='c'; break;
-	case 0x23: out='d'; break; case 0x24: out='e'; break; case 0x2b: out='f'; break;
-	case 0x34: out='g'; break; case 0x33: out='h'; break; case 0x43: out='i'; break;
-	case 0x3b: out='j'; break; case 0x42: out='k'; break; case 0x4b: out='l'; break;
-	case 0x3a: out='m'; break; case 0x31: out='n'; break; case 0x44: out='o'; break;
-	case 0x4d: out='p'; break; case 0x15: out='q'; break; case 0x2d: out='r'; break;
-	case 0x1b: out='s'; break; case 0x2c: out='t'; break; case 0x3c: out='u'; break;
-	case 0x2a: out='v'; break; case 0x1d: out='w'; break; case 0x22: out='x'; break;
-	case 0x35: out='y'; break; case 0x1a: out='z'; break; case 0x29: out=' '; break;
-	case 0x16: out='1'; break; case 0x1e: out='2'; break; case 0x26: out='3'; break;
-	case 0x25: out='4'; break; case 0x2e: out='5'; break; case 0x36: out='6'; break;
-	case 0x3d: out='7'; break; case 0x3e: out='8'; break; case 0x46: out='9'; break; case 0x45: out='0'; break;
-	case 0x5a: out='\n'; break; case 0x0d: out='\t'; break; default: break;
+
+	if (data == 0xf0)
+	{
+		m_send_sink_break = true;
+		return;
 	}
-	if (out) std::fputc(out, m_send_sink);
+
+	if (m_send_sink_break)
+	{
+		if (data == 0x12)
+			m_send_sink_shift = false;
+		m_send_sink_break = false;
+		return;
+	}
+
+	if (data == 0x12)
+	{
+		m_send_sink_shift = true;
+		return;
+	}
+
+	char out = 0;
+	switch (data)
+	{
+	case 0x1c: out = m_send_sink_shift ? 'A' : 'a'; break;
+	case 0x32: out = m_send_sink_shift ? 'B' : 'b'; break;
+	case 0x21: out = m_send_sink_shift ? 'C' : 'c'; break;
+	case 0x23: out = m_send_sink_shift ? 'D' : 'd'; break;
+	case 0x24: out = m_send_sink_shift ? 'E' : 'e'; break;
+	case 0x2b: out = m_send_sink_shift ? 'F' : 'f'; break;
+	case 0x34: out = m_send_sink_shift ? 'G' : 'g'; break;
+	case 0x33: out = m_send_sink_shift ? 'H' : 'h'; break;
+	case 0x43: out = m_send_sink_shift ? 'I' : 'i'; break;
+	case 0x3b: out = m_send_sink_shift ? 'J' : 'j'; break;
+	case 0x42: out = m_send_sink_shift ? 'K' : 'k'; break;
+	case 0x4b: out = m_send_sink_shift ? 'L' : 'l'; break;
+	case 0x3a: out = m_send_sink_shift ? 'M' : 'm'; break;
+	case 0x31: out = m_send_sink_shift ? 'N' : 'n'; break;
+	case 0x44: out = m_send_sink_shift ? 'O' : 'o'; break;
+	case 0x4d: out = m_send_sink_shift ? 'P' : 'p'; break;
+	case 0x15: out = m_send_sink_shift ? 'Q' : 'q'; break;
+	case 0x2d: out = m_send_sink_shift ? 'R' : 'r'; break;
+	case 0x1b: out = m_send_sink_shift ? 'S' : 's'; break;
+	case 0x2c: out = m_send_sink_shift ? 'T' : 't'; break;
+	case 0x3c: out = m_send_sink_shift ? 'U' : 'u'; break;
+	case 0x2a: out = m_send_sink_shift ? 'V' : 'v'; break;
+	case 0x1d: out = m_send_sink_shift ? 'W' : 'w'; break;
+	case 0x22: out = m_send_sink_shift ? 'X' : 'x'; break;
+	case 0x35: out = m_send_sink_shift ? 'Y' : 'y'; break;
+	case 0x1a: out = m_send_sink_shift ? 'Z' : 'z'; break;
+
+	case 0x16: out = m_send_sink_shift ? '!' : '1'; break;
+	case 0x1e: out = m_send_sink_shift ? '@' : '2'; break;
+	case 0x26: out = m_send_sink_shift ? '#' : '3'; break;
+	case 0x25: out = m_send_sink_shift ? '$' : '4'; break;
+	case 0x2e: out = m_send_sink_shift ? '%' : '5'; break;
+	case 0x36: out = m_send_sink_shift ? '^' : '6'; break;
+	case 0x3d: out = m_send_sink_shift ? '&' : '7'; break;
+	case 0x3e: out = m_send_sink_shift ? '*' : '8'; break;
+	case 0x46: out = m_send_sink_shift ? '(' : '9'; break;
+	case 0x45: out = m_send_sink_shift ? ')' : '0'; break;
+
+	case 0x54: out = m_send_sink_shift ? '{' : '['; break;
+	case 0x5b: out = m_send_sink_shift ? '}' : ']'; break;
+	case 0x4c: out = m_send_sink_shift ? ':' : ';'; break;
+	case 0x52: out = m_send_sink_shift ? '"' : '\''; break;
+	case 0x41: out = m_send_sink_shift ? '<' : ','; break;
+	case 0x49: out = m_send_sink_shift ? '>' : '.'; break;
+	case 0x4a: out = m_send_sink_shift ? '?' : '/'; break;
+	case 0x4e: out = m_send_sink_shift ? '_' : '-'; break;
+	case 0x55: out = m_send_sink_shift ? '+' : '='; break;
+	case 0x5d: out = m_send_sink_shift ? '|' : '\\'; break;
+	case 0x0e: out = m_send_sink_shift ? '~' : '`'; break;
+
+	case 0x29: out = ' '; break;
+	case 0x5a: out = '\n'; break;
+	case 0x0d: out = '\t'; break;
+	default: break;
+	}
+
+	if (out)
+		std::fputc(out, m_send_sink);
 }
 
 void asma2k_state::send_sink_end()
@@ -261,6 +326,7 @@ void asma2k_state::send_sink_end()
 	if (m_send_sink) { std::fflush(m_send_sink); std::fclose(m_send_sink); m_send_sink = nullptr; }
 	m_send_sink_active = false;
 	m_send_sink_break = false;
+	m_send_sink_shift = false;
 }
 
 void asma2k_state::port_a_w(uint8_t data)

@@ -17,7 +17,7 @@ stock AS2000 ROM
     -> user presses Send through the normal matrix/IRQ path
     -> stock ROM generates the same logical keyboard events it would send to a PC
     -> emulator decodes those events
-    -> plain text is written to a fixed salida.txt
+    -> plain text is written to a fixed send.txt
 ```
 
 The central design principle is to preserve the original firmware decision-making. MAME should provide the missing external hardware condition and observe the resulting output; it should not bypass the ROM's attachment or Send logic.
@@ -140,14 +140,14 @@ Break/release events should update state but should not themselves append text. 
 First-version output is intentionally fixed and simple:
 
 ```text
-salida.txt
+send.txt
 ```
 
 No save dialog and no user-selectable path are required in the initial design. A practical location is alongside the machine's MAME-managed persistent/NVRAM state if that can be done cleanly and portably.
 
 The preferred transaction semantics are still to be decided explicitly before implementation. The simplest candidate is:
 
-- when a new Send transaction begins, create/truncate `salida.txt`;
+- when a new Send transaction begins, create/truncate `send.txt`;
 - append decoded text as the ROM emits it;
 - flush/close when the Send transaction ends or when the emulation session closes cleanly.
 
@@ -165,7 +165,7 @@ A second open semantic choice is whether the first sink should capture only a bo
 6. What keycode table/encoding reaches that boundary for the PC mode selected by the ROM?
 7. How are Shift, break/release, Return, Tab, Backspace and repeated keys represented?
 8. What event unambiguously marks the beginning and end of one Send transaction for file truncation/flush purposes?
-9. What exact MAME-managed directory should contain `salida.txt` so behavior remains portable across platforms?
+9. What exact MAME-managed directory should contain `send.txt` so behavior remains portable across platforms?
 10. Should the first sink capture only Send transfers or all connected-keyboard traffic?
 
 ## Future validation concept
@@ -183,7 +183,7 @@ Expected behavior would be:
 3. change the proposed PC-connection state to Connected;
 4. observe the stock firmware enter its PC keyboard-emulation state;
 5. press Send through the ordinary emulated matrix/IRQ path;
-6. obtain `salida.txt` containing exactly the expected text and agreed line-ending semantics;
+6. obtain `send.txt` containing exactly the expected text and agreed line-ending semantics;
 7. return to Disconnected and confirm that stock no-host behavior remains intact.
 
 This future validation outline is documentation only. It does not authorize source changes or worker execution.
@@ -231,7 +231,7 @@ Closed enough to retain as design constraints:
 - `$85A1-$85C5` is the leading attachment-probe range;
 - PA0/PA2 are candidate host-sense inputs;
 - release encodings `$F0 + code` and `code|$80` are statically observed behind `$00A4 bit0`;
-- the desired output is a fixed platform-neutral `salida.txt`, not a host keyboard device.
+- the desired output is a fixed platform-neutral `send.txt`, not a host keyboard device.
 
 Still deliberately open before any worker instruction is issued:
 

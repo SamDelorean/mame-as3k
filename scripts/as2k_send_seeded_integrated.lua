@@ -1,4 +1,4 @@
--- Validate integrated PC Connected + salida.txt sink.
+-- Validate integrated PC Connected + send.txt sink.
 local cpu=assert(manager.machine.devices[':maincpu'])
 local send=assert(manager.machine.ioport.ports[':COL.7']:field(0x10))
 local pc=assert(manager.machine.ioport.ports[':PC_CONNECTED']:field(0x01))
