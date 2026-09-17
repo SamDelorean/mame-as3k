@@ -5,12 +5,12 @@ Status: ACTIVE CONTROL CONTRACT
 ## Mission
 Continue development and validation of the AlphaSmart 2000 (`asma2k`) emulator autonomously on `as2k-mame0289-dev`, using the existing MAME 0.289 work as the baseline.
 
-This loop is independent from the `AS2K-V3.14.x` Gate 1A firmware worker. It may improve emulator fidelity and diagnostics needed by Gate 1A, but it must not modify the firmware patch or declare Gate 1A closed.
+This loop is independent from the `AS2K-V3.14.x` firmware worker. It may consume published reverse-engineering findings and improve emulator fidelity, but it must not modify the firmware patch or infer firmware authorization from emulator progress.
 
 ## Cycle contract
 Every productive cycle must:
 1. synchronize safely with `origin/as2k-mame0289-dev`;
-2. read `AGENTS.md`, this file, `EMULATOR_AUTOMATION_INBOX.md`, `EMULATOR_AUTOMATION_TASK.md`, `CODEX_NEXT.md`, `CODEX_RESULT.md`, and `EMULATION_FINDINGS.md`;
+2. read `AGENTS.md`, this file, `EMULATOR_AUTOMATION_INBOX.md`, `EMULATOR_AUTOMATION_TASK.md`, `HOST_ATTACHMENT_TEXT_SINK.md`, `CODEX_NEXT.md`, `CODEX_RESULT.md`, and `EMULATION_FINDINGS.md`;
 3. inspect recent commits and local state before editing;
 4. select the highest-priority unresolved authorized emulator task;
 5. diagnose before changing code;
@@ -26,14 +26,14 @@ Every productive cycle must:
 
 ## Engineering priority
 Current priority order:
-1. reliable keyboard/input automation and observable normal matrix behavior;
-2. Send key (`$47`) and normal Send path evidence toward `$8606`;
-3. Print path evidence toward `$ABC9`;
-4. Find, Clear/Recover, SpellCheck, F1-F8 and normal editor/typing behavior;
-5. MMIO/IRQ/timer fidelity needed by observed firmware behavior;
-6. MC68HC11D0 SCI behavior required for faithful wired transmission;
-7. NVRAM/reset/persistence regression coverage;
-8. other AS2000 fidelity gaps supported by measured evidence.
+1. preserve the already validated normal keyboard matrix/IRQ, Send and Print behavior as regression gates;
+2. close the exact stock host-attachment condition around `$85A1-$85C5`, especially the PA0/PA2 truth table, polarity and timing, using measured ROM evidence rather than trial-and-error bit forcing;
+3. model a manual MAME `PC connection: Disconnected / Connected` state that changes only the external electrical attachment condition;
+4. prove that the stock ROM autonomously enters `Attached to PC, emulating keyboard.` when Connected and retains the stock disconnected route when Disconnected;
+5. exercise stock wired Send through the normal matrix/IRQ path with Connected active;
+6. add a logical outgoing-key decoder at/near the `$AA26` transport boundary and write the resulting text to fixed `salida.txt`;
+7. validate exact text output, modifier/release handling and repeated characters, then retain editor/LCD/NVRAM/F1-F8/Send/Print coverage;
+8. only after that consider lower-level physical host-transport fidelity, SCI, or other AS2000 gaps supported by measured evidence.
 
 Do not jump to unrelated peripherals merely because they are easier.
 
@@ -43,6 +43,9 @@ Do not jump to unrelated peripherals merely because they are easier.
 - Prefer normal emulated input paths over debugger-only injection.
 - Preserve diagnostic observability and reproducibility.
 - Treat AlphaSmart 2000 v3.1.4 as the primary behavioral baseline for current validation.
+- The PC-connection control must never force firmware PC, call `$8606`, or write host-classification RAM directly; it may only provide the proven external hardware condition.
+- The first wired-output target is a platform-neutral text sink, not an operating-system keyboard device. Do not add HID/uinput/SendInput/CGEvent dependencies for this gate.
+- MC68HC11D0 SCI is not a prerequisite for `salida.txt`; SCI remains a later fidelity task or a requirement of separate modified-firmware/USB work.
 - Do not begin AS3000/NEO implementation from this worker.
 - Do not implement DynFS or firmware filesystem changes here.
 
@@ -70,9 +73,10 @@ Forbidden:
 - automatically committing interrupted/unverified work merely to obtain a clean tree;
 - treating a dirty tree as quota-owned unless it matches the recorded checkpoint fingerprint exactly;
 - changing architecture merely to force a test PASS;
+- guessing a PA0/PA2 attachment state merely because it reaches `$8606`;
 - treating deterministic emulator/firmware failure as transient infrastructure noise;
 - weakening a regression or classifier to obtain PASS;
-- touching the separate Gate 1A firmware checkout.
+- touching the separate firmware checkout as part of an emulator cycle.
 
 ## Codex quota pause / recovery contract
 A Codex usage-limit event is an expected control-plane condition, not a generic engineering failure.
