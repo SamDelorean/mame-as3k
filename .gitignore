@@ -31,6 +31,7 @@
 !/src/
 !/shaders/
 !/tests/
+!/tools/
 !/doxygen/
 !/web/
 !/.gitattributes
@@ -49,3 +50,5 @@ regtests/chdman/temp
 regtests/jedutil/output
 /CMakeLists.txt
 /samples
+
+/tools/*.zip

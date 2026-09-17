@@ -23,7 +23,7 @@ EOF
 )
 
 codex exec \
-  --sandbox workspace-write \
+  --sandbox danger-full-access \
   -c 'approval_policy="never"' \
   -C "$ROOT" \
   "$PROMPT"
