@@ -698,3 +698,9 @@ A stock-ROM runtime test closed the next gate. PA2 alone reaches `$80D4`, but wi
 With PA0+PA2 high, the stock ROM produced one `$80C8` PC entry, then repeatedly cycled through `$80D4` and `$80E5`. Send was then pressed and released through the existing MAME `COL.7`/`Send` input field, which uses the normal keyboard IRQ path. The observed causal path was `$80EE -> $80F2 -> $8606`; each marker occurred twice during the press/release test. No ROM/RAM write, forced PC, direct `$8606` call, or Send dispatcher patch was used.
 
 This validates normal wired Send dispatch from the stock firmware once PC keyboard mode is established. It also refines the emulator host-line contract: PC attachment/service requires PA2 asserted and PA0 held at its idle-high level in the absence of host-to-AlphaSmart traffic. The next gate is the `$8606` wired document stream into `$AA26`, followed by decoding the original keyboard transport into `salida.txt`.
+
+## Wired Send text-sink validation (2026-09-17)
+
+A fresh stock-ROM NVRAM was seeded through the normal keyboard path with `abc 123`. After restart, PA0+PA2 were presented at their validated PC idle-high levels, the firmware reached `PC_KEYBOARD_READY`, and Send was pressed through the normal `COL.7` matrix/IRQ path. The stock ROM executed `$8606`, emitted 21 bytes at the validated `$AA54/$0046` boundary, completed `$8662`, and returned through `$80F5`.
+
+The captured stream was `1C F0 1C 32 F0 32 21 F0 21 29 F0 29 16 F0 16 1E F0 1E 26 F0 26`. Decoding Set-2 make/break semantics yields exactly `abc 123`; `salida.txt` contained bytes `61 62 63 20 31 32 33`. `tools/as2k_decode_wired_send.py` is the reproducible decoder used for this gate. This validates `$AA54/$0046` as a sufficient logical text-sink boundary while preserving the ROM's original translation and sequencing.
