@@ -704,3 +704,10 @@ This validates normal wired Send dispatch from the stock firmware once PC keyboa
 A fresh stock-ROM NVRAM was seeded through the normal keyboard path with `abc 123`. After restart, PA0+PA2 were presented at their validated PC idle-high levels, the firmware reached `PC_KEYBOARD_READY`, and Send was pressed through the normal `COL.7` matrix/IRQ path. The stock ROM executed `$8606`, emitted 21 bytes at the validated `$AA54/$0046` boundary, completed `$8662`, and returned through `$80F5`.
 
 The captured stream was `1C F0 1C 32 F0 32 21 F0 21 29 F0 29 16 F0 16 1E F0 1E 26 F0 26`. Decoding Set-2 make/break semantics yields exactly `abc 123`; `salida.txt` contained bytes `61 62 63 20 31 32 33`. `tools/as2k_decode_wired_send.py` is the reproducible decoder used for this gate. This validates `$AA54/$0046` as a sufficient logical text-sink boundary while preserving the ROM's original translation and sequencing.
+## Integrated PC Connected and text sink (2026-09-17)
+
+The AS2000 driver now has a `PC Connected` configuration input. ON presents the validated stock-ROM host idle condition (PA2 asserted and PA0 idle high) through the AS2000 PORTA read boundary; OFF leaves both external host-sense bits absent. The firmware remains responsible for classification, PC service entry and disconnect handling.
+
+The validated `$8606 -> $AA54/$0046 -> $80F5` path is now integrated as a Send-scoped text sink. `$8606` opens/truncates `salida.txt`, `$AA54` consumes only bytes emitted by the stock serializer while Send is active, and `$80F5` flushes/closes the file. The first decoder implements the validated Set-2 make/break subset needed for ordinary letters, digits, space, Return and Tab; unsupported codes are ignored pending evidence-backed expansion.
+
+End-to-end regression used fresh NVRAM, explicitly set `PC Connected=OFF`, typed `abc 123` through the normal keyboard, restarted with `PC Connected=ON`, waited for `$80E5`, and pressed Send through `COL.7`. The ROM emitted 21 serializer bytes and the integrated sink produced `salida.txt` containing exactly `abc 123` (`61 62 63 20 31 32 33`). State: `INTEGRATED_PC_TEXT_SINK_V1`.

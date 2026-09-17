@@ -21,6 +21,8 @@
 #include "emupal.h"
 #include "screen.h"
 
+#include <cstdio>
+
 
 namespace {
 
@@ -81,6 +83,7 @@ public:
 		: alphasmart_state(mconfig, type, tag)
 		, m_io_view(*this, "io")
 		, m_dictbank(*this, "dictbank")
+		, m_pc_connected(*this, "PC_CONNECTED")
 	{
 	}
 
@@ -91,16 +94,24 @@ protected:
 
 private:
 	void lcd_ctrl_w(uint8_t data);
+	uint8_t asma2k_port_a_r();
 	virtual void port_a_w(uint8_t data) override;
 	void gate1a_pc_w(uint16_t pc);
+	void send_sink_begin();
+	void send_sink_byte(uint8_t data);
+	void send_sink_end();
 	void gate1a_probe_stop();
 
 	void asma2k_mem(address_map &map) ATTR_COLD;
 
 	memory_view m_io_view;
 	required_memory_bank m_dictbank;
+	required_ioport m_pc_connected;
 
 	uint8_t m_lcd_ctrl;
+	bool m_send_sink_active = false;
+	bool m_send_sink_break = false;
+	FILE *m_send_sink = nullptr;
 	uint64_t m_gate1a_instruction_count = 0;
 };
 
@@ -203,6 +214,55 @@ void asma2k_state::lcd_ctrl_w(uint8_t data)
 	m_lcd_ctrl = data;
 }
 
+uint8_t asma2k_state::asma2k_port_a_r()
+{
+	uint8_t data = (m_port_a & 0xfd) | (m_battery_status->read() << 1);
+	if (BIT(m_pc_connected->read(), 0))
+		data |= 0x05; // PC attached: PA2 asserted, PA0 idle high
+	return data;
+}
+
+void asma2k_state::send_sink_begin()
+{
+	if (m_send_sink)
+		std::fclose(m_send_sink);
+	m_send_sink = std::fopen("salida.txt", "wb");
+	m_send_sink_active = m_send_sink != nullptr;
+	m_send_sink_break = false;
+}
+
+void asma2k_state::send_sink_byte(uint8_t data)
+{
+	if (!m_send_sink_active)
+		return;
+	if (data == 0xf0) { m_send_sink_break = true; return; }
+	if (m_send_sink_break) { m_send_sink_break = false; return; }
+	char out = 0;
+	switch (data) {
+	case 0x1c: out='a'; break; case 0x32: out='b'; break; case 0x21: out='c'; break;
+	case 0x23: out='d'; break; case 0x24: out='e'; break; case 0x2b: out='f'; break;
+	case 0x34: out='g'; break; case 0x33: out='h'; break; case 0x43: out='i'; break;
+	case 0x3b: out='j'; break; case 0x42: out='k'; break; case 0x4b: out='l'; break;
+	case 0x3a: out='m'; break; case 0x31: out='n'; break; case 0x44: out='o'; break;
+	case 0x4d: out='p'; break; case 0x15: out='q'; break; case 0x2d: out='r'; break;
+	case 0x1b: out='s'; break; case 0x2c: out='t'; break; case 0x3c: out='u'; break;
+	case 0x2a: out='v'; break; case 0x1d: out='w'; break; case 0x22: out='x'; break;
+	case 0x35: out='y'; break; case 0x1a: out='z'; break; case 0x29: out=' '; break;
+	case 0x16: out='1'; break; case 0x1e: out='2'; break; case 0x26: out='3'; break;
+	case 0x25: out='4'; break; case 0x2e: out='5'; break; case 0x36: out='6'; break;
+	case 0x3d: out='7'; break; case 0x3e: out='8'; break; case 0x46: out='9'; break; case 0x45: out='0'; break;
+	case 0x5a: out='\n'; break; case 0x0d: out='\t'; break; default: break;
+	}
+	if (out) std::fputc(out, m_send_sink);
+}
+
+void asma2k_state::send_sink_end()
+{
+	if (m_send_sink) { std::fflush(m_send_sink); std::fclose(m_send_sink); m_send_sink = nullptr; }
+	m_send_sink_active = false;
+	m_send_sink_break = false;
+}
+
 void asma2k_state::port_a_w(uint8_t data)
 {
 	m_io_view.select(BIT(data, 6));
@@ -223,10 +283,10 @@ void asma2k_state::gate1a_pc_w(uint16_t pc)
 	switch (pc)
 	{
 	case 0x9716: logerror("AS2K_GATE1A SEND_REDIRECT PC=%04X\n", pc); break;
-	case 0x8606: logerror("AS2K_TX SEND_CABLE_8606 PC=%04X\n", pc); break;
-	case 0xaa54: logerror("AS2K_TX BYTE_AA54 value=%02X\n", m_maincpu->space(AS_PROGRAM).read_byte(0x0046)); break;
+	case 0x8606: send_sink_begin(); logerror("AS2K_TX SEND_CABLE_8606 PC=%04X\n", pc); break;
+	case 0xaa54: { const uint8_t data = m_maincpu->space(AS_PROGRAM).read_byte(0x0046); send_sink_byte(data); logerror("AS2K_TX BYTE_AA54 value=%02X\n", data); break; }
 	case 0x8662: logerror("AS2K_TX CLEANUP_8662\n"); break;
-	case 0x80f5: logerror("AS2K_TX RETURN_80F5\n"); break;
+	case 0x80f5: send_sink_end(); logerror("AS2K_TX RETURN_80F5\n"); break;
 	case 0xaa26: logerror("AS2K_TX SERVICE_AA26\n"); break;
 	case 0xaa52: logerror("AS2K_TX SERIALIZER_AA52 PA=%02X PD=%02X\n", m_port_a, m_port_d); break;
 	case 0xaaf0: logerror("AS2K_TX RECEIVE_AAF0\n"); break;
@@ -563,6 +623,11 @@ static INPUT_PORTS_START( asma2k )
 	PORT_BIT(0x40, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_M)    PORT_CHAR('m')  PORT_CHAR('M')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
 	PORT_BIT(0x80, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_N)    PORT_CHAR('n')  PORT_CHAR('N')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
 
+	PORT_START("PC_CONNECTED")
+	PORT_CONFNAME(0x01, 0x00, "PC Connected")
+	PORT_CONFSETTING(0x00, DEF_STR(Off))
+	PORT_CONFSETTING(0x01, DEF_STR(On))
+
 	PORT_START("BATTERY")
 	PORT_CONFNAME(0x01, 0x01, "Battery status")
 	PORT_CONFSETTING (0x00, DEF_STR(Low))
@@ -650,6 +715,7 @@ void alphasmart_state::alphasmart(machine_config &config)
 void asma2k_state::asma2k(machine_config &config)
 {
 	alphasmart(config);
+	m_maincpu->in_pa_callback().set(FUNC(asma2k_state::asma2k_port_a_r));
 	m_maincpu->set_addrmap(AS_PROGRAM, &asma2k_state::asma2k_mem);
 	m_maincpu->instruction_callback().set(FUNC(asma2k_state::gate1a_pc_w));
 }
