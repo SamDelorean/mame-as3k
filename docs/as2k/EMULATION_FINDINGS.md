@@ -719,3 +719,11 @@ The integrated AS2000 text sink was extended from the initial lowercase/digit su
 A fresh-NVRAM end-to-end regression seeded mixed case, all validated punctuation, Return, `Next`, Tab and `X`. After restart with `PC Connected=ON`, the stock ROM reached `PC_KEYBOARD_READY`, Send was pressed through `COL.7`, and 210 bytes were captured at `$AA54/$0046`. The integrated sink reproduced the seeded document exactly, including punctuation, one newline and one tab.
 
 Return is emitted by the ROM as make `5A` and is written as LF (`0A`) in `send.txt`; Tab is emitted as make `0D` and preserved as ASCII HT (`09`). The offline reproducer `tools/as2k_decode_wired_send.py` was updated to the same evidence-backed decoder and reproduced the integrated output byte-for-byte. State: `INTEGRATED_PC_TEXT_SINK_V2`.
+
+## ROM-directory text sink placement (2026-09-17)
+
+`send.txt` is no longer opened relative to MAME's process working directory. The AS2000 driver now resolves the first configured MAME ROM search directory from `machine().options().media_path()` using `path_iterator`, and opens `send.txt` there through `emu_file` with write/create semantics.
+
+For a command line whose first ROM path is `/home/spc/Projects/alphasmart/private/roms/as2k`, the runtime log reports `AS2K_TX TEXT_SINK_OPEN path=/home/spc/Projects/alphasmart/private/roms/as2k/send.txt`.
+
+A fresh end-to-end regression confirmed that no `send.txt` is created in the MAME source/current-working directory, while the ROM working directory receives the 45-byte expected V2 test document exactly. `./as2kdiag -validate` returned RC=0. With a multipath `-rompath`, the destination contract is deliberately the first configured ROM path. State: `ROM_DIRECTORY_TEXT_SINK_VALIDATED_V1`.

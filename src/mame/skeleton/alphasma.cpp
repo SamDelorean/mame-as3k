@@ -15,13 +15,14 @@
 ****************************************************************************/
 
 #include "emu.h"
+#include "fileio.h"
+#include "emuopts.h"
 #include "cpu/mc68hc11/mc68hc11.h"
 #include "machine/nvram.h"
 #include "video/hd44780.h"
 #include "emupal.h"
 #include "screen.h"
 
-#include <cstdio>
 
 
 namespace {
@@ -112,7 +113,7 @@ private:
 	bool m_send_sink_active = false;
 	bool m_send_sink_break = false;
 	bool m_send_sink_shift = false;
-	FILE *m_send_sink = nullptr;
+	std::unique_ptr<emu_file> m_send_sink;
 	uint64_t m_gate1a_instruction_count = 0;
 };
 
@@ -226,9 +227,41 @@ uint8_t asma2k_state::asma2k_port_a_r()
 void asma2k_state::send_sink_begin()
 {
 	if (m_send_sink)
-		std::fclose(m_send_sink);
-	m_send_sink = std::fopen("send.txt", "wb");
-	m_send_sink_active = m_send_sink != nullptr;
+	{
+		m_send_sink->close();
+		m_send_sink.reset();
+	}
+
+	std::string rom_directory;
+	path_iterator rom_paths(machine().options().media_path());
+	if (!rom_paths.next(rom_directory) || rom_directory.empty())
+	{
+		logerror("AS2K_TX TEXT_SINK_OPEN_FAILED reason=no_rom_directory\n");
+		m_send_sink_active = false;
+		return;
+	}
+
+	m_send_sink = std::make_unique<emu_file>(
+		rom_directory,
+		OPEN_FLAG_WRITE | OPEN_FLAG_CREATE | OPEN_FLAG_CREATE_PATHS);
+
+	std::error_condition const err = m_send_sink->open("send.txt");
+	if (err)
+	{
+		logerror("AS2K_TX TEXT_SINK_OPEN_FAILED path=%s%s%s error=%s\n",
+			rom_directory,
+			PATH_SEPARATOR,
+			"send.txt",
+			err.message());
+		m_send_sink.reset();
+		m_send_sink_active = false;
+	}
+	else
+	{
+		logerror("AS2K_TX TEXT_SINK_OPEN path=%s\n", m_send_sink->fullpath());
+		m_send_sink_active = true;
+	}
+
 	m_send_sink_break = false;
 	m_send_sink_shift = false;
 }
@@ -318,12 +351,17 @@ void asma2k_state::send_sink_byte(uint8_t data)
 	}
 
 	if (out)
-		std::fputc(out, m_send_sink);
+		m_send_sink->write(&out, 1);
 }
 
 void asma2k_state::send_sink_end()
 {
-	if (m_send_sink) { std::fflush(m_send_sink); std::fclose(m_send_sink); m_send_sink = nullptr; }
+	if (m_send_sink)
+	{
+		m_send_sink->flush();
+		m_send_sink->close();
+		m_send_sink.reset();
+	}
 	m_send_sink_active = false;
 	m_send_sink_break = false;
 	m_send_sink_shift = false;

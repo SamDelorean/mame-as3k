@@ -143,7 +143,7 @@ First-version output is intentionally fixed and simple:
 send.txt
 ```
 
-No save dialog and no user-selectable path are required in the initial design. A practical location is alongside the machine's MAME-managed persistent/NVRAM state if that can be done cleanly and portably.
+No save dialog and no user-selectable path are required in the initial design. The implemented location is the first configured MAME ROM search directory, resolved through `path_iterator`; this keeps `send.txt` alongside the ROM working set rather than in the process current-working directory.
 
 The preferred transaction semantics are still to be decided explicitly before implementation. The simplest candidate is:
 
@@ -165,7 +165,7 @@ A second open semantic choice is whether the first sink should capture only a bo
 6. What keycode table/encoding reaches that boundary for the PC mode selected by the ROM?
 7. How are Shift, break/release, Return, Tab, Backspace and repeated keys represented?
 8. What event unambiguously marks the beginning and end of one Send transaction for file truncation/flush purposes?
-9. What exact MAME-managed directory should contain `send.txt` so behavior remains portable across platforms?
+9. CLOSED: `send.txt` is written to the first configured MAME ROM search directory (`machine().options().media_path()`), i.e. the AS2000 ROM working folder.
 10. Should the first sink capture only Send transfers or all connected-keyboard traffic?
 
 ## Future validation concept
