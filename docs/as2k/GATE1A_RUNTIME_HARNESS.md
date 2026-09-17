@@ -22,3 +22,9 @@ The classifier is intentionally fail-closed for the default `full` profile. A tr
 A trace-level PASS does not by itself prove complete host-side keyboard emulation; if that external behavior is not yet modeled, report the result as a partial runtime pass rather than treating Send as removed or irrelevant.
 
 No DynFS behavior is part of this emulator gate.
+
+## Integrated derived-ROM runner
+
+`scripts/as2k_run_irless_full.py` runs the private derived Gate 1A ROM from a disposable MAME set and drives `scripts/as2k_irless_full_probe.lua`. The Lua probe waits for the established editor-ready state, types through `natkeyboard`, and presses Send and Print through their normal matrix fields. The Python runner then applies the fail-closed `full` classifier to the resulting `error.log`.
+
+Validated locally on 2026-09-17: Send produced `$9716 -> $8606`; Print produced `$9804 -> $ABC9`; no forbidden/failure marker was observed. This validates firmware routing under the emulator contract, not external wired-host transfer fidelity.
