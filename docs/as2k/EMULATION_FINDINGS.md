@@ -677,3 +677,16 @@ broken Send key, firmware regression or SCI failure. Raising a sense bit alone
 has not been established as sufficient to reach wired Send. Physical polarity,
 attachment sequencing and host handshakes still need evidence before an
 implementation; no CPU core or driver behavior was changed.
+
+## Host attachment: PC ready and disconnect validation (2026-09-17)
+
+Stock AS2000 v3.1.4 ROM, SHA-1 `e0b777dc68c671c31ba808e214fb9d2573b9a853`.
+
+- Directed attachment test: presenting PA2=1 at `port_a_r()` makes the stock ROM execute `$8067 -> $806B -> $85A1 -> $85C2 (V=1) -> $8070 -> $80C8 -> $A3AC` without RAM/ROM patching or forced PC state.
+- `PC_KEYBOARD_READY` is a control-flow state, not a separate RAM flag. After `$80C8 -> $A3AC` returns, the first hit at `$80D4` proves entry into the PC keyboard service loop; repeated `$80E5` hits with an empty queue (`$008E == $008F`) are the stricter ready signature.
+- In that state, normal Send keycode `$47` is consumed by `$938C` and should follow `$80EE -> $80F2 -> $8606`.
+- Directed disconnect test at normal throttled timing: PA2=1 at t=1.000 s, held for 3.000 s, PA2=0 at t=4.000 s. The stock ROM reached `$89B6` at t=6.794 s and editor/idle `$87D7` at t=6.797 s.
+- Therefore removing PA2 is sufficient for the stock ROM to leave PC mode and return to the editor autonomously. Observed disconnect latency was about 2.8 s.
+- Emulator contract: `PC Connected=ON` presents the attachment condition; `OFF` removes it. Firmware remains responsible for PC classification, ready state, disconnect debounce/state cleanup, and editor return.
+
+Next directed runtime gate: hold PA2=1, observe `$80C8 -> $A3AC -> $80D4` (preferably repeated `$80E5` with `$8E==$8F`), then inject Send only through the normal keyboard matrix/IRQ and require `$80EE -> $80F2 -> $8606`.
