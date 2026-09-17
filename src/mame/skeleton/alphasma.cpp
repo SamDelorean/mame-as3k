@@ -179,6 +179,9 @@ uint8_t alphasmart_state::port_d_r()
 
 void alphasmart_state::port_d_w(uint8_t data)
 {
+	const uint8_t changed = m_port_d ^ data;
+	if (changed & 0x03)
+		logerror("AS2K_TX PORTD old=%02X new=%02X changed01=%02X\n", m_port_d, data, changed & 0x03);
 	m_port_d = data;
 }
 
@@ -220,7 +223,13 @@ void asma2k_state::gate1a_pc_w(uint16_t pc)
 	switch (pc)
 	{
 	case 0x9716: logerror("AS2K_GATE1A SEND_REDIRECT PC=%04X\n", pc); break;
-	case 0x8606: logerror("AS2K_GATE1A SEND_CABLE PC=%04X\n", pc); break;
+	case 0x8606: logerror("AS2K_TX SEND_CABLE_8606 PC=%04X\n", pc); break;
+	case 0xaa54: logerror("AS2K_TX BYTE_AA54 value=%02X\n", m_maincpu->space(AS_PROGRAM).read_byte(0x0046)); break;
+	case 0x8662: logerror("AS2K_TX CLEANUP_8662\n"); break;
+	case 0x80f5: logerror("AS2K_TX RETURN_80F5\n"); break;
+	case 0xaa26: logerror("AS2K_TX SERVICE_AA26\n"); break;
+	case 0xaa52: logerror("AS2K_TX SERIALIZER_AA52 PA=%02X PD=%02X\n", m_port_a, m_port_d); break;
+	case 0xaaf0: logerror("AS2K_TX RECEIVE_AAF0\n"); break;
 	case 0x962d: logerror("AS2K_GATE1A PRINT_DETACH_962D PC=%04X\n", pc); break;
 	case 0x9804: logerror("AS2K_GATE1A PRINT_DETACH_9804 PC=%04X\n", pc); break;
 	case 0xabc9: logerror("AS2K_GATE1A PRINT_FALLBACK PC=%04X\n", pc); break;
