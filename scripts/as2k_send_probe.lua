@@ -7,6 +7,16 @@ local send = assert(port:field(0x10))
 assert(send.mask == 0x10 and send.name == 'Send'
     and #send:keyboard_codes(0) > 0, 'unexpected Send matrix field')
 local idle, stage, frames = 0, 0, 0
+local host_reads, host_high = 0, 0
+-- Observe actual CPU reads only; returning nil preserves the original data.
+-- Stock D0 PORTA is at $0000. PA0/PA2 are documented wired-host senses.
+local host_tap = cpu.spaces['program']:install_read_tap(0, 0, 'send_host_sense',
+    function(offset, data, mask)
+        if stage == 2 or stage == 3 then
+            host_reads = host_reads + 1
+            host_high = host_high | (data & 0x05)
+        end
+    end)
 local function mark(message)
     manager.machine:logerror('AS2K_SEND_PROBE ' .. message .. '\n')
 end
@@ -20,6 +30,8 @@ emu.register_frame_done(function()
             mark('RELEASE')
             stage, frames = 3, 0
         elseif stage == 3 and frames == 120 then
+            mark(string.format('HOST_SENSE reads=%d high_mask=%02X', host_reads, host_high))
+            host_tap:remove()
             mark('COMPLETE')
             manager.machine:exit()
             stage = 4

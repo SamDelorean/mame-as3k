@@ -2,10 +2,11 @@
 """Stock v3.1.4 normal Send probe; no wired transport or IR-detach claim.
 
 Run with --runtime for private firmware validation; default runs ROM-free tests.
-Exit 0 validated, 10 observed route mismatch, 20 infrastructure, 30 evidence gap.
+Exit 0 validated, 10 route/host-sense mismatch, 20 infrastructure, 30 evidence gap.
 """
 import hashlib
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -19,6 +20,7 @@ MARKERS = (
     'AS2K_GATE1A SEND_REDIRECT PC=9716',
     'AS2K_GATE1A FAIL_IR_SEND_D2DC PC=D2DC',
     'AS2K_SEND_PROBE RELEASE',
+    'AS2K_SEND_PROBE HOST_SENSE reads=',
     'AS2K_SEND_PROBE COMPLETE',
     'AS2K_GATE1A PROBE_STOP instructions=',
 )
@@ -33,9 +35,18 @@ def classify(log, rc):
         if found < 0:
             return 30, f'EVIDENCE missing_or_unordered={marker}'
         position = found + len(marker)
+    observations = re.findall(
+        r'AS2K_SEND_PROBE HOST_SENSE reads=([0-9]+) high_mask=([0-9A-F]{2})$',
+        log, re.MULTILINE)
+    if (log.count('AS2K_SEND_PROBE HOST_SENSE') != 1
+            or len(observations) != 1 or int(observations[0][0]) == 0):
+        return 30, 'EVIDENCE missing_or_invalid_host_sense_reads'
+    if int(observations[0][1], 16) != 0:
+        return 10, 'stock_host_sense_mismatch PA0_or_PA2_high'
     if 'AS2K_GATE1A SEND_CABLE PC=8606' in log:
         return 10, 'stock_route_mismatch unexpected_cable_entry'
-    return 0, 'VALIDATED stock_Send_matrix_to_9716_D2DC; wired_Send_unproven'
+    return 0, ('VALIDATED stock_Send_matrix_to_9716_D2DC; '
+        f'host_sense_reads={observations[0][0]} PA0_PA2_low; wired_Send_unproven')
 
 
 def runtime():
@@ -69,24 +80,54 @@ def runtime():
         return 20
 
 
+def fixture(markers=MARKERS):
+    return '\n'.join(markers).replace(
+        'HOST_SENSE reads=', 'HOST_SENSE reads=77 high_mask=00')
+
+
 class EvidenceTests(unittest.TestCase):
     def test_ordered_stock_route(self):
-        self.assertEqual(classify('\n'.join(MARKERS), 0)[0], 0)
+        self.assertEqual(classify(fixture(), 0)[0], 0)
 
     def test_every_marker_required(self):
         for marker in MARKERS:
             with self.subTest(marker=marker):
-                self.assertEqual(classify('\n'.join(m for m in MARKERS if m != marker), 0)[0], 30)
+                self.assertEqual(classify(fixture(m for m in MARKERS if m != marker), 0)[0], 30)
 
     def test_boot_landmarks_not_send_evidence(self):
         order = MARKERS[3:5] + MARKERS[:3] + MARKERS[5:]
-        self.assertEqual(classify('\n'.join(order), 0)[0], 30)
+        self.assertEqual(classify(fixture(order), 0)[0], 30)
 
     def test_runtime_failure_overrides_markers(self):
-        self.assertEqual(classify('\n'.join(MARKERS), 1)[0], 20)
+        self.assertEqual(classify(fixture(), 1)[0], 20)
+
+    def test_host_sense_evidence_invalid(self):
+        for value in ('reads=0 high_mask=00', 'reads=x high_mask=00',
+                      'reads=77 high_mask=GG', 'reads=77 high_mask=00 extra'):
+            with self.subTest(value=value):
+                self.assertEqual(classify(fixture().replace(
+                    'reads=77 high_mask=00', value), 0)[0], 30)
+
+    def test_host_sense_unexpected_high(self):
+        for mask in ('01', '04', '05'):
+            self.assertEqual(classify(fixture().replace(
+                'high_mask=00', 'high_mask=' + mask), 0)[0], 10)
+
+    def test_duplicate_host_observation(self):
+        self.assertEqual(classify(fixture() +
+            '\nAS2K_SEND_PROBE HOST_SENSE reads=77 high_mask=00', 0)[0], 30)
+
+    def test_outside_observation_cannot_replace_malformed(self):
+        log = fixture().replace('reads=77', 'reads=x')
+        log += '\nAS2K_SEND_PROBE HOST_SENSE reads=77 high_mask=00'
+        self.assertEqual(classify(log, 0)[0], 30)
+
+    def test_boot_host_observation_not_send_evidence(self):
+        order = MARKERS[6:7] + MARKERS[:6] + MARKERS[7:]
+        self.assertEqual(classify(fixture(order), 0)[0], 30)
 
     def test_unexpected_wired_route(self):
-        self.assertEqual(classify('\n'.join(MARKERS) + '\nAS2K_GATE1A SEND_CABLE PC=8606', 0)[0], 10)
+        self.assertEqual(classify(fixture() + '\nAS2K_GATE1A SEND_CABLE PC=8606', 0)[0], 10)
 
 
 if __name__ == '__main__':

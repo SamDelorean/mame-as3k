@@ -657,3 +657,23 @@ IR-detached contract, not to this stock-firmware expectation. No firmware or
 emulator change is justified by that marker alone. This probe does not establish
 LCD typing contents, electrical IRQ timing, wired transport, Print, or the
 IR-detached firmware gate. The KS0066 F05 NEEDS REDUMP limitation remains.
+
+## Wired-host sense boundary in the current model (2026-09-16)
+
+The normal Send probe now passively counts CPU PORTA reads at `$0000` from
+Send press through five held frames and 120 post-release frames. Two fresh
+stock-v3.1.4 runs each observed 77 reads; the OR of PA0/PA2 (`data & 0x05`)
+was zero. The existing ordered `$9716 -> $D2DC` path still completed, with
+no `$8606`. The tap returns no value and does not inject signal levels.
+The classifier requires positive, ordered read evidence and rejects nonzero
+sense bits; 77 is an observation, not a fixed timing requirement.
+
+Source explains this limitation: `alphasmart_state::port_a_r()` feeds back
+`m_port_a` with only the battery bit replaced. HC11 `port_w`/`ddr_w` callbacks
+provide output bits masked by the direction register; D0 resets PORTA direction
+to `0x70`. There is no external PC/ADB sense source or attachment input in the
+driver. This is an emulator host-interface modeling gap, not evidence of a
+broken Send key, firmware regression or SCI failure. Raising a sense bit alone
+has not been established as sufficient to reach wired Send. Physical polarity,
+attachment sequencing and host handshakes still need evidence before an
+implementation; no CPU core or driver behavior was changed.
