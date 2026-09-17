@@ -1,39 +1,56 @@
-# Current Codex task — stock PC attachment and text-sink prerequisite
+# Current Codex task — downward cursor scrolling to the hidden fifth line
 
-Date: 2026-09-17. Branch: `as2k-mame0289-dev`.
-
-Read `AGENTS.md`, `EMULATOR_AUTOMATION_CONTROL.md`, `EMULATOR_AUTOMATION_TASK.md`, `HOST_ATTACHMENT_TEXT_SINK.md`, `CODEX_RESULT.md`, and `EMULATION_FINDINGS.md` before editing.
-
-## Closed evidence — do not repeat as discovery work
-
-- normal typing/input automation is usable;
-- Send is keycode `$47`, matrix `COL.7 / 0x10`, through normal `kb_irq`;
-- stock v3.1.4 with no host reaches `$9716 -> $D2DC` on a real Send press;
-- two passive PORTA runs observed 77 reads each with PA0/PA2 low;
-- source inspection shows the current AS2000 driver has no external PC/ADB attachment source;
-- the integrated IRLESS runner validates Send `$9716 -> $8606` and Print `$9804 -> $ABC9` without forbidden IrDA handlers.
-
-These facts identify a missing host-interface model, not a Send-key or SCI defect.
+Date: 2026-09-13. Branch: as2k-mame0289-dev. Attempt 1.
+Read AGENTS.md and mandatory private AS2K_KNOWLEDGE.md first.
+Upward recovery/insertion/top-viewport recall accepted in LOCAL 8z4GGYPr;
+see CODEX_RESULT.md. Preserve closed findings and their evidence limits.
 
 ## One narrow task
 
-Advance the exact stock host-attachment model. Use the ROM-side finding that `$85A1-$85C5` is the leading attachment-probe candidate and PA0/PA2 are the candidate sense/handshake inputs.
+Observe downward cursor scrolling after upward recovery. This is an unresolved
+coverage gap, not a demonstrated emulator defect. With fresh private NVRAM,
+ordinary asma2k input and established idle gating, enter ab, Return, cd,
+Return, ef, Return, gh, Return, ij. Press Up four times, then Down four times
+with separate observations. Insert x at the resulting cursor. No insertion
+at the top in this sequence. Exclude automatic wrapping, sixth-line entry
+and unrelated peripherals.
 
-Do not guess active levels. First determine whether the currently available published evidence is sufficient to specify the exact boolean/temporal condition for PC attachment. If it is not sufficient, add only the smallest passive MAME instrumentation/test support needed to observe the relevant state without changing machine behavior, and record exactly what ROM/hardware evidence is still missing.
+## Pass criteria and LOCAL validation
 
-If the exact attachment condition is already closed by newer evidence when this task runs, implement the smallest `PC connection: Disconnected / Connected` configuration input that presents only that proven external condition.
+- Preserve exact accepted fifth-line and fourth-Up checkpoints. Capture ordered
+  all-four-row raw DDRAM after each Down and insertion, 40 cells per row.
+  Proposed Down 1-3 viewport: ab<B5> / cd<B5> / ef<B5> / gh<B5>;
+  proposed Down 4: cd<B5> / ef<B5> / gh<B5> / ij;
+  proposed insertion: cd<B5> / ef<B5> / gh<B5> / ijx.
+  These are hypotheses, including cursor column. Preregister expectations;
+  retain mismatches and distinguish observation/input/firmware behavior before
+  any driver change. Never silently learn gate expectations from the same run.
+- Observe F2/F1, separate-process saved-NVRAM recall and another F2/F1;
+  determine viewport restoration policy for this cursor position.
+- Require keyboard transitions, ordered LCD writes (commands can suffice for
+  cursor-only steps), both displays enabled, exact four rows and completion.
+- Retain shift detection from boot. Shared decoder does not model shifts;
+  any shift requires separate visible-screen analysis before raw DDRAM can
+  establish viewport behavior. Preserve workflow and trace format.
+- ROM-free negative fixtures: stale top viewport, lost fifth line, wrong
+  insertion column, wrong controller/row, stale recall, missing/unordered
+  evidence and shift commands. Bounded external LOCAL validation stops at
+  first unexplained regression. No CPU/video core changes.
+- Retain upward-scroll/recall, fifth/fourth/three-line entry/recall, boundary
+  join/resplit, vertical/horizontal traversal, newline/join, interior editing,
+  all-eight-file isolation/restart, production kKzZ=+, Send, diagnostic
+  keyboard/LCD, six-character pixels, input fixtures, HC11 harness, both
+  focused builds, -validate and both BIOS audits.
+- REVIEW runs no builds or long runtime. Record commands, values, limits,
+  files and final status in CODEX_RESULT.md; git diff --check. Commit validated
+  redistributable changes only; push origin/as2k-mame0289-dev.
 
-## Pass criteria
-
-- `Disconnected` preserves stock no-host behavior and the existing Send route observation.
-- `Connected`, when implementation is justified by proven polarity/timing, causes the stock ROM itself to enter `Attached to PC, emulating keyboard.`.
-- No direct call to `$8606`, no forced CPU PC and no RAM poke of `$008A` or equivalent state.
-- Preserve normal keyboard IRQ/MMIO, Print, PA6 banking, PA4-PA5 banking/DictROM behavior and shared timer/capture resources.
-- No SCI, USB HID or operating-system keyboard work is required for this task.
-- If blocked on unresolved attachment semantics, finish with a deterministic `EVIDENCE` blocker and the exact missing observation rather than forcing a plausible bit pattern.
-
-## Following gate
-
-After autonomous stock PC attachment works, the next task is the logical wired-output decoder and fixed `salida.txt` sink defined in `HOST_ATTACHMENT_TEXT_SINK.md`, with an end-to-end known-text test such as `ABC 123`.
-
-Run focused regression tests, `git diff --check`, commit only validated redistributable changes and push `origin/as2k-mame0289-dev`. Do not publish ROM/NVRAM/private traces.
+Preserve blank-LCD provenance, physical B5/F05 NEEDS REDUMP, decoder-shift,
+production recall, timing/XIRQ and hardware limits. No exhaustive editing,
+RAM/decode or physical display claim. Exclude proprietary/local artifacts.
+Unrelated malformed gpl_renderer.h bytes remain excluded; LOCAL substitutes
+committed header only in disposable snapshot. Prior ICE cause is unproven.
+Untracked EMULATION_FINDINGS.md is separate work; do not fold it into this task.
+After at most three attempts without materially new evidence/progress, mark
+OPEN/DEFERRED, record missing evidence and select one different narrow task,
+unless a demonstrated blocking defect warrants continuation.
