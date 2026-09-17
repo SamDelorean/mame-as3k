@@ -1,85 +1,60 @@
-# AS2000 REVIEW — upward scrolling and recall PASS
+# AS2000 automation — reproducible boot readiness harness
 
-2026-09-13; as2k-mame0289-dev; attempt 1.
-Read AGENTS.md, CODEX_NEXT.md, mandatory private AS2K_KNOWLEDGE.md,
-LOCAL summary, candidate scripts/diff and external validator.
-No demonstrated emulator defect; no driver or core correction required.
+2026-09-16; branch as2k-mame0289-dev; baseline fa02f95f541.
 
-LOCAL summary 2026-09-13T08:24:24-06:00 exits 0.
-Private artifacts: external state/as2k-validation.8z4GGYPr.
-Log: external logs/as2k-local-validation-20260913-072602.log.
-Twelve ordered entry/Up/insertion/switch checkpoints and two separate-process
-recall checkpoints pass. Accepted fifth-line viewport is preserved:
-cd<B5> / ef<B5> / gh<B5> / ij. Up 1-3 retain those rows; Up 4 yields
-ab<B5> / cd<B5> / ef<B5> / gh<B5>. Inserting x yields
-abx<B5> / cd<B5> / ef<B5> / gh<B5>. F2/F1, saved-NVRAM restart with F1,
-and another F2/F1 preserve this top viewport for this sequence.
-Each row is exactly 40 space-padded raw DDRAM cells. Keyboard transitions,
-LCD bus writes between ordered observations, both displays enabled and
-completion are required. Cursor-only steps may issue commands without data
-rewrites. No display-shift or automatic-entry-shift commands observed from
-boot through these checkpoints. Preregistered expectations were not changed;
-script hypothesis comments predate acceptance here. Intermediate cursor
-columns are not independently established by unchanged DDRAM rows.
+Read AGENTS.md, automation control/inbox/task, CODEX_NEXT.md, previous
+CODEX_RESULT.md, EMULATION_FINDINGS.md and private AS2K_KNOWLEDGE.md.
+This cycle inherited the four staged repair/report files listed below and an
+unrelated unstaged worker sandbox change; all were inspected. The latter is
+preserved and excluded from publication. Newer automation directive prioritizes reliable
+normal input diagnostics over the older downward-scroll coverage task.
 
-LOCAL uses ordinary asma2k v314 input, fresh private NVRAM shared only with
-recall, five-frame presses and 60 idle frames at PC 87D7. These are test
-parameters, not hardware timing. Each editing phase is bounded at 180 emulated /
-300 wall seconds; no CPU/RAM/IRQ injection in these editing phases.
+Diagnosed a harness portability defect: BOOT_EDITOR copied its required Lua
+probe from /tmp/as2k_editor_ready.lua, which is not a repository dependency.
+Added the existing idle observation logic as a repository Lua probe and copied
+from that location with an explicit missing-probe classification. State-directory
+creation now checks failure. A readiness marker cannot override a nonzero
+MAME exit. No driver, CPU/video core, firmware or build changes.
 
-Retained gates pass: fifth/fourth/three-line entry/recall, boundary join/resplit,
-vertical/horizontal traversal, newline/join, interior editing, all-eight-file
-isolation/restart with canonical bank bounds, production kKzZ=+ persisted bytes
-and recall completion, Send COL.7/10 (10 -> 00 -> 10), diagnostic az09=+ and
-recall, six F05 glyphs (240 pixels), input fixtures, isolated HC11 harness
-including 148 synthetic STOP/wake cycles. Validator exit 0 establishes both
-focused serial builds and -validate gates. Both concise BIOS audits report
-one ROM set OK / best available and F05 NEEDS REDUMP for both controllers;
-audits do not establish v308 editing behavior.
-
-No genuine contradiction with canonical evidence identified. Preserve the
-2026-09-12 blank-LCD observation and subsequent accepted runtime checkpoints
-with separate provenance; this run does not explain the earlier extraction.
-Physical B5 glyph, complete charset, decoder shifts, production recall without
-LCD bus evidence, firmware-backed unmasked XIRQ, real wake source/period and
-Send host transfer remain limited/unverified. Synthetic cycles are not new
-firmware auto-off evidence. No wrap, sixth-line, exhaustive editing, RAM/decode
-or physical display claim; no hardware assumption promoted.
-
-Cheap REVIEW checks:
-- Three candidate scripts, decoder and workflow match LOCAL snapshot bytes.
-  HC11 source also matches; driver matches after exact CI instrumentation
-  (direct driver comparison initially differed by its expected 13 added lines).
-- PYTHONDONTWRITEBYTECODE=1 python3 scripts/as2k_test_newline_edit.py:
-  12 ROM-free tests PASS (1.246s), including stale/lost/misplaced rows, insertion
-  column, recall, shift and missing/unordered evidence negatives.
-- bash -n external state/as2k-local-validator.sh: PASS.
+Validation:
+- Before and after repair:
+  XDG_STATE_HOME=/tmp/as2k-worker-validation bash tools/automation/test_as2k_boot_editor.sh
+  Both exit 0: VALIDATED BOOT_EDITOR; PC=87D7, stable_frames=60.
+  Existing as2kdiag binary, private v3.1.4 SHA1
+  e0b777dc68c671c31ba808e214fb9d2573b9a853; fresh per-run state.
+- bash -n tools/automation/test_as2k_boot_editor.sh: PASS.
+- PYTHONDONTWRITEBYTECODE=1 python3 scripts/as2k_test_boot_editor_harness.py:
+  4 ROM-free tests PASS: success, missing repository probe,
+  missing readiness marker, and marker followed by runtime failure.
+  Fake MAME/hash commands exercise classification only, not firmware behavior.
 - git diff --check: PASS.
-No make, rebuild, MAME launch, long tests, polling or full validation-log read.
-LOCAL committed-header substitution is disposable-snapshot-only; unrelated
-malformed gpl_renderer.h bytes excluded; prior compiler ICE cause unproven.
 
-Publication: three newline scripts, CODEX_RESULT.md and CODEX_NEXT.md.
-Next task: downward cursor scrolling back to the hidden fifth line after
-upward recovery. External validator unchanged. ROMs, logs, binaries and local
-artifacts excluded. EMULATION_FINDINGS.md is separate work, untouched.
+Scope: editor readiness only; no new Send/Print routing, typing, LCD, SCI,
+scrolling or physical hardware claim. No unexplained regression observed.
+EMULATION_FINDINGS.md unchanged: no new reusable hardware/firmware finding.
 
-Final git status --short before publication:
+Publication recovery (this cycle):
+- `git fetch origin as2k-mame0289-dev`: PASS; previous HOST read-only
+  metadata restriction no longer occurs.
+- `git rev-list --left-right --count HEAD...origin/as2k-mame0289-dev`:
+  1 / 0 at startup; no incoming commits or merge required.
+- Re-ran the runtime, four ROM-free tests, shell syntax and both staged and
+  unstaged diff checks above: all PASS. Runtime again reported PC=87D7,
+  stable_frames=60. No new source changes or build required.
+- Reviewed the existing unpublished fa02f95f541 harness commit before
+  publishing it together with this repair. No proprietary artifacts included.
+
+This cycle closes the interrupted boot-readiness repair/publication stage.
+Next authorized stage: normal matrix Send/input path evidence; no Send/Print
+or SCI result is claimed here. No unexplained regression observed.
+
+Safe publication files:
+- docs/as2k/CODEX_RESULT.md
+- scripts/as2k_editor_ready.lua
+- scripts/as2k_test_boot_editor_harness.py
+- tools/automation/test_as2k_boot_editor.sh
+
+Preserved unrelated local change / expected post-publication status:
 ```text
- M docs/as2k/CODEX_NEXT.md
- M docs/as2k/CODEX_RESULT.md
- M scripts/as2k_check_newline_edit.py
- M scripts/as2k_newline_edit.lua
- M scripts/as2k_test_newline_edit.py
-?? docs/as2k/EMULATION_FINDINGS.md
-```
-Expected post-publication status: only the same untracked EMULATION_FINDINGS.md.
-
-Publication integration: first push rejected because origin gained four
-documentation-only commits through 76672732c12 (Gate 1A, host USB and SCI
-findings). Reviewed and rebased cleanly; validated scripts, decoder and
-workflow still match LOCAL bytes. No executable changes arrived.
-Post-rebase git diff --check passed. Final git status --short after commit:
-```text
-?? docs/as2k/EMULATION_FINDINGS.md
+ M tools/automation/run_as2k_emulator_cycle.sh
 ```

@@ -45,7 +45,7 @@ fi
 ROMPATH="$(dirname "$ROM");$CGROM_ZIP_DIR;$CGROM_RAW_DIR"
 
 state_base="${XDG_STATE_HOME:-$HOME/.local/state}/as2k-emulator-automation/boot-editor"
-mkdir -p "$state_base"
+mkdir -p "$state_base" || { echo "BLOCKED state_directory_failed"; exit 20; }
 run_dir="$(mktemp -d "$state_base/run.XXXXXX")" || { echo "BLOCKED mktemp_failed"; exit 20; }
 log="$run_dir/error.log"
 
@@ -53,7 +53,10 @@ log="$run_dir/error.log"
 # successfully by the automated editor exercise: 60 consecutive frames at
 # firmware idle/STOP PC $87D7 with the natural-keyboard queue empty.
 probe="$run_dir/editor_ready.lua"
-cp /tmp/as2k_editor_ready.lua "$probe"
+cp "$ROOT/scripts/as2k_editor_ready.lua" "$probe" || {
+  echo "HARNESS_REQUIRED BOOT_EDITOR editor_probe_unavailable"
+  exit 30
+}
 
 set +e
 (
@@ -68,7 +71,7 @@ rc=$?
 set -e
 log="$run_dir/error.log"
 
-if grep -q 'AS2K_GATE1A EDITOR_READY' "$log"; then
+if [[ "$rc" -eq 0 ]] && grep -q 'AS2K_GATE1A EDITOR_READY' "$log"; then
   echo "VALIDATED BOOT_EDITOR marker=$(grep 'AS2K_GATE1A EDITOR_READY' "$log" | head -n 1)"
   exit 0
 fi
