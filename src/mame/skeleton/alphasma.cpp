@@ -693,10 +693,10 @@ static INPUT_PORTS_START( asma2k )
 	PORT_BIT(0x40, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_M)    PORT_CHAR('m')  PORT_CHAR('M')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
 	PORT_BIT(0x80, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_N)    PORT_CHAR('n')  PORT_CHAR('N')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
 
+	// Emulator-only host attachment control.  Pause/Break is not part of the
+	// AlphaSmart 2000 keyboard matrix, so it cannot be mistaken for an AS2K key.
 	PORT_START("PC_CONNECTED")
-	PORT_CONFNAME(0x01, 0x00, "PC Connected")
-	PORT_CONFSETTING(0x00, DEF_STR(Off))
-	PORT_CONFSETTING(0x01, DEF_STR(On))
+	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_OTHER) PORT_NAME("PC Connected (Pause/Break)") PORT_CODE(KEYCODE_PAUSE) PORT_TOGGLE
 
 	PORT_START("BATTERY")
 	PORT_CONFNAME(0x01, 0x01, "Battery status")
