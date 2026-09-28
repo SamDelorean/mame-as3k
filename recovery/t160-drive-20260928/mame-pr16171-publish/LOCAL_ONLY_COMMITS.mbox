@@ -1,0 +1,256 @@
+From 89a4deae29232e0c77ec288b66701e64510ca510 Mon Sep 17 00:00:00 2001
+From: SamDelorean <184150317+SamDelorean@users.noreply.github.com>
+Date: Wed, 23 Sep 2026 09:47:36 -0600
+Subject: [PATCH] asma2k: add wired printer and accessory mode selector
+
+---
+ src/mame/skeleton/alphasma.cpp | 133 ++++++++++++++++++++++++++++-----
+ 1 file changed, 116 insertions(+), 17 deletions(-)
+
+diff --git a/src/mame/skeleton/alphasma.cpp b/src/mame/skeleton/alphasma.cpp
+index fba7023f37f..ef3b69ac64a 100644
+--- a/src/mame/skeleton/alphasma.cpp
++++ b/src/mame/skeleton/alphasma.cpp
+@@ -15,6 +15,9 @@
+ ****************************************************************************/
+ 
+ #include "emu.h"
++#include "imagedev/printer.h"
++
++#include <array>
+ #include "fileio.h"
+ #include "emuopts.h"
+ #include "cpu/mc68hc11/mc68hc11.h"
+@@ -95,12 +98,13 @@ public:
+ 		: alphasmart_state(mconfig, type, tag)
+ 		, m_io_view(*this, "io")
+ 		, m_dictbank(*this, "dictbank")
+-		, m_pc_connected(*this, "PC_CONNECTED")
++		, m_printer(*this, "printer")
+ 	{
+ 	}
+ 
+ 	void asma2k(machine_config &config);
+-	DECLARE_INPUT_CHANGED_MEMBER(pc_connected_changed);
++	DECLARE_INPUT_CHANGED_MEMBER(accessory_mode_changed);
++	DECLARE_INPUT_CHANGED_MEMBER(accessory_action_changed);
+ 
+ protected:
+ 	virtual void machine_start() override ATTR_COLD;
+@@ -109,6 +113,7 @@ private:
+ 	void lcd_ctrl_w(uint8_t data);
+ 	uint8_t asma2k_port_a_r();
+ 	void asma2k_port_d_w(uint8_t data);
++	TIMER_CALLBACK_MEMBER(printer_frame_done);
+ 	virtual void port_a_w(uint8_t data) override;
+ 	void pc_clock_rising(bool data);
+ 	void pc_set2_byte(uint8_t data);
+@@ -122,9 +127,19 @@ private:
+ 
+ 	memory_view m_io_view;
+ 	required_memory_bank m_dictbank;
+-	required_ioport m_pc_connected;
++	required_device<printer_image_device> m_printer;
+ 
+ 	uint8_t m_lcd_ctrl;
++	// 0=disconnected, 1=wired printer, 2=PC keyboard.
++	// ADB is not implemented; do not advertise a nonfunctional Mac mode.
++	uint8_t m_connection_mode = 0;
++	bool m_disconnect_on_next_press = false;
++	emu_timer *m_printer_frame_timer = nullptr;
++	bool m_printer_frame_active = false;
++	uint8_t m_printer_edge_count = 0;
++	uint64_t m_printer_start_tick = 0;
++	std::array<uint64_t, 32> m_printer_edge_ticks{};
++	std::array<uint8_t, 32> m_printer_edge_levels{};
+ 	uint16_t m_pc_frame = 0;
+ 	uint8_t m_pc_frame_bits = 0;
+ 	bool m_pc_set2_break = false;
+@@ -245,8 +260,12 @@ void asma2k_state::lcd_ctrl_w(uint8_t data)
+ uint8_t asma2k_state::asma2k_port_a_r()
+ {
+ 	uint8_t data = (m_port_a & 0xfd) | (m_battery_status->read() << 1);
+-	if (BIT(m_pc_connected->read(), 0))
+-		data |= 0x05; // PC attached: PA2 asserted, PA0 idle high
++	// The printer and PC keyboard are mutually exclusive connections.
++	data &= ~uint8_t(0x05);
++	if (m_connection_mode == 1 && m_printer->is_ready())
++		data |= 0x01; // Printer ready: PA0 high, PA2 low.
++	else if (m_connection_mode == 2)
++		data |= 0x05; // PC keyboard: PA2 and idle PA0 high.
+ 	return data;
+ }
+ 
+@@ -352,14 +371,35 @@ static constexpr char32_t s_pc_us_text[][2] =
+ 
+ static_assert(std::size(s_pc_us_text) == unsigned(as2k_pc_key::slash) - unsigned(as2k_pc_key::a) + 1);
+ 
+-INPUT_CHANGED_MEMBER(asma2k_state::pc_connected_changed)
++INPUT_CHANGED_MEMBER(asma2k_state::accessory_mode_changed)
+ {
+-	// PC Connected defines the host session.  Send is intentionally not part
+-	// of the sink contract: a real PC only sees keyboard traffic on the wire.
++	if (!newval)
++		return;
++
++	// After Print/Send, the next selection disconnects directly. Otherwise
++	// cycle through the currently emulated accessories only.
++	m_connection_mode = (m_disconnect_on_next_press || m_connection_mode == 2)
++		? 0 : m_connection_mode + 1;
++	m_disconnect_on_next_press = false;
+ 	m_pc_frame = 0;
+ 	m_pc_frame_bits = 0;
+ 	pc_keyboard_reset();
+ 	send_sink_end();
++	m_printer_frame_active = false;
++	m_printer_frame_timer->adjust(attotime::never);
++	static constexpr char const *names[] = { "Disconnected", "Wired printer", "PC keyboard" };
++	popmessage("AlphaSmart: %s", names[m_connection_mode]);
++}
++
++INPUT_CHANGED_MEMBER(asma2k_state::accessory_action_changed)
++{
++	// Preserve the original keyboard matrix interrupt on both transitions.
++	m_maincpu->set_input_line(MC68HC11_IRQ_LINE, ASSERT_LINE);
++	if (newval)
++		return; // The original Send and Print inputs are active-low.
++	if ((param == 1 && m_connection_mode == 1) ||
++		(param == 2 && m_connection_mode == 2))
++		m_disconnect_on_next_press = true;
+ }
+ 
+ void asma2k_state::pc_keyboard_reset()
+@@ -408,7 +448,7 @@ void asma2k_state::pc_clock_rising(bool data)
+ 	{
+ 		if (!m_send_sink_active)
+ 		{
+-			if (!BIT(m_pc_connected->read(), 0))
++			if (m_connection_mode != 2)
+ 				return;
+ 			send_sink_begin();
+ 			if (!m_send_sink_active)
+@@ -427,13 +467,63 @@ void asma2k_state::pc_clock_rising(bool data)
+ 
+ void asma2k_state::asma2k_port_d_w(uint8_t data)
+ {
+-	// The wired PC keyboard interface uses PD0 as clock and inverted PD1 as data.
+-	if (BIT(m_pc_connected->read(), 0) && !BIT(m_port_d, 0) && BIT(data, 0))
+-		pc_clock_rising(!BIT(data, 1));
++	bool const before = BIT(m_port_d, 0);
++	bool const after = BIT(data, 0);
+ 
++	if (m_connection_mode == 2 && !before && after)
++		pc_clock_rising(!BIT(data, 1)); // PC keyboard: PD0 clock, inverted PD1 data.
++
++	if (m_connection_mode == 1 && m_printer->is_ready() && before != after)
++	{
++		uint64_t const tick = machine().time().as_ticks(2'000'000);
++		if (!m_printer_frame_active && !before && after)
++		{
++			m_printer_frame_active = true;
++			m_printer_start_tick = tick;
++			m_printer_edge_count = 0;
++			// Sample the stop bit at +328 ticks and finish at +330.
++			// The next byte can begin as soon as +344 ticks.
++			m_printer_frame_timer->adjust(attotime::from_ticks(330, 2'000'000));
++		}
++		if (m_printer_frame_active && m_printer_edge_count < m_printer_edge_ticks.size())
++		{
++			m_printer_edge_ticks[m_printer_edge_count] = tick;
++			m_printer_edge_levels[m_printer_edge_count] = after;
++			++m_printer_edge_count;
++		}
++	}
+ 	alphasmart_state::port_d_w(data);
+ }
+ 
++TIMER_CALLBACK_MEMBER(asma2k_state::printer_frame_done)
++{
++	if (!m_printer_frame_active)
++		return;
++	m_printer_frame_active = false;
++	if (m_connection_mode != 1 || !m_printer->is_ready() || !m_printer_edge_count)
++		return;
++
++	// Physical PD0 is inverted compared with an 8N1 serial byte.
++	auto const level_at = [this](uint64_t tick) -> uint8_t
++	{
++		uint8_t level = 1;
++		for (unsigned i = 0; i < m_printer_edge_count; ++i)
++		{
++			if (m_printer_edge_ticks[i] > tick)
++				break;
++			level = m_printer_edge_levels[i];
++		}
++		return level;
++	};
++	if (level_at(m_printer_start_tick + 328) != 0)
++		return; // Incomplete frame or non-printer pulse.
++
++	uint8_t byte = 0;
++	for (unsigned bit = 0; bit < 8; ++bit)
++		byte |= !level_at(m_printer_start_tick + 48 + bit * 35) << bit;
++	m_printer->output(byte); // Preserve the guest's original printer language.
++}
++
+ void asma2k_state::send_sink_begin()
+ {
+ 	if (m_send_sink)
+@@ -968,7 +1058,7 @@ static INPUT_PORTS_START( asma2k )
+ 	PORT_BIT(0x02, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x04, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x08, IP_ACTIVE_LOW, IPT_UNUSED)
+-	PORT_BIT(0x10, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_F12) PORT_NAME("Send") PORT_CHAR(UCHAR_MAMEKEY(F12)) PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
++	PORT_BIT(0x10, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_F12) PORT_NAME("Send") PORT_CHAR(UCHAR_MAMEKEY(F12)) PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(asma2k_state::accessory_action_changed), 2)
+ 	PORT_BIT(0x20, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x40, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_F11)  PORT_CHAR(UCHAR_MAMEKEY(F11)) PORT_NAME("Find") PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x80, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_UP)   PORT_CHAR(UCHAR_MAMEKEY(UP))     PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+@@ -986,7 +1076,7 @@ static INPUT_PORTS_START( asma2k )
+ 	PORT_BIT(0x02, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_F5)   PORT_CHAR(UCHAR_MAMEKEY(F5)) PORT_NAME("F5 (File 5)") PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x04, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_BACKSLASH) PORT_CHAR('\\') PORT_CHAR('|') PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x08, IP_ACTIVE_LOW, IPT_UNUSED)
+-	PORT_BIT(0x10, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_F9)   PORT_CHAR(UCHAR_MAMEKEY(F9)) PORT_NAME("Print") PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
++	PORT_BIT(0x10, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_F9)   PORT_CHAR(UCHAR_MAMEKEY(F9)) PORT_NAME("Print") PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(asma2k_state::accessory_action_changed), 1)
+ 	PORT_BIT(0x20, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_F10)  PORT_CHAR(UCHAR_MAMEKEY(F10)) PORT_NAME("Spell Check") PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x40, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_ENTER)   PORT_NAME("Return") PORT_CHAR(13) PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x80, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_SPACE)     PORT_CHAR(' ') PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+@@ -1045,10 +1135,10 @@ static INPUT_PORTS_START( asma2k )
+ 	PORT_BIT(0x40, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_M)    PORT_CHAR('m')  PORT_CHAR('M')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x80, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_N)    PORT_CHAR('n')  PORT_CHAR('N')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 
+-	// Emulator-only host attachment control.  Pause/Break is not part of the
+-	// AlphaSmart 2000 keyboard matrix, so it cannot be mistaken for an AS2K key.
++	// Emulator-only accessory selector. Pause/Break is outside the real
++	// AlphaSmart keyboard matrix; one press advances, or disconnects after Print/Send.
+ 	PORT_START("PC_CONNECTED")
+-	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_OTHER) PORT_NAME("PC Connected (Pause/Break)") PORT_CODE(KEYCODE_PAUSE) PORT_TOGGLE PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(asma2k_state::pc_connected_changed), 0)
++	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_OTHER) PORT_NAME("Accessory select (Pause/Break)") PORT_CODE(KEYCODE_PAUSE) PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(asma2k_state::accessory_mode_changed), 0)
+ 
+ 	PORT_START("BATTERY")
+ 	PORT_CONFNAME(0x01, 0x01, "Battery status")
+@@ -1084,6 +1174,14 @@ void asma2k_state::machine_start()
+ 
+ 	m_dictbank->configure_entries(0, 8, memregion("spellcheck")->base(), 0x4000);
+ 	m_dictbank->set_entry(0);
++	m_printer_frame_timer = timer_alloc(FUNC(asma2k_state::printer_frame_done), this);
++	save_item(NAME(m_connection_mode));
++	save_item(NAME(m_disconnect_on_next_press));
++	save_item(NAME(m_printer_frame_active));
++	save_item(NAME(m_printer_edge_count));
++	save_item(NAME(m_printer_start_tick));
++	save_item(NAME(m_printer_edge_ticks));
++	save_item(NAME(m_printer_edge_levels));
+ }
+ 
+ void alphasmart_state::machine_reset()
+@@ -1131,6 +1229,7 @@ void asma2k_state::asma2k(machine_config &config)
+ 	m_maincpu->in_pa_callback().set(FUNC(asma2k_state::asma2k_port_a_r));
+ 	m_maincpu->out_pd_callback().set(FUNC(asma2k_state::asma2k_port_d_w));
+ 	m_maincpu->set_addrmap(AS_PROGRAM, &asma2k_state::asma2k_mem);
++	PRINTER(config, m_printer);
+ }
+ 
+ // MCU: MC68HC11D0P
+-- 
+2.53.0
+

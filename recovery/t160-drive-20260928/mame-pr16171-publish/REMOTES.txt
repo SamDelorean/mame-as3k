@@ -1,0 +1,4 @@
+isotherm	https://github.com/isotherm/mame.git (fetch)
+isotherm	https://github.com/isotherm/mame.git (push)
+origin	git@github.com:SamDelorean/mame-as3k.git (fetch)
+origin	git@github.com:SamDelorean/mame-as3k.git (push)
