@@ -1,0 +1,5 @@
+path=/home/spc/Projects/alphasmart/mame-as3k-dev
+timestamp=2026-09-28T09:25:27-06:00
+head=d16291c6aeb816fad41fac46f35508cbc3e099a1
+branch=as3k-mame0289-dev
+toplevel=/home/spc/Projects/alphasmart/mame-as3k-dev
