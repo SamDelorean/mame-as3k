@@ -1,0 +1,5 @@
+path=/home/spc/Projects/alphasmart/mame-as2k-irtrace
+timestamp=2026-09-28T09:25:16-06:00
+head=044d4cbb52f6960d5c4af614e738aa26f97162a4
+branch=as2k-ir-send-trace
+toplevel=/home/spc/Projects/alphasmart/mame-as2k-irtrace
