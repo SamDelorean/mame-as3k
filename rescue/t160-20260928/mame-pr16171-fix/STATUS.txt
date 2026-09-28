@@ -1,0 +1,2 @@
+ M AGENTS.md
+ M src/mame/skeleton/alphasma.cpp
