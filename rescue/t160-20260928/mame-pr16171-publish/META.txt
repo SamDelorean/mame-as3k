@@ -1,0 +1,5 @@
+path=/home/spc/Projects/alphasmart/mame-pr16171-publish
+timestamp=2026-09-28T09:25:35-06:00
+head=89a4deae29232e0c77ec288b66701e64510ca510
+branch=asma2k-pr16171-publish-20260922
+toplevel=/home/spc/Projects/alphasmart/mame-pr16171-publish
