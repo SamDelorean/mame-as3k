@@ -1,0 +1,5 @@
+path=/home/spc/Projects/alphasmart/mame-as2k-eeepc
+timestamp=2026-09-28T09:25:11-06:00
+head=b1f08e607ecaa846a4bfb759bd95090229f01ac7
+branch=DETACHED
+toplevel=/home/spc/Projects/alphasmart/mame-as2k-eeepc
