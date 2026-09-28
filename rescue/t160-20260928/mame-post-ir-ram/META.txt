@@ -1,0 +1,5 @@
+path=/home/spc/Projects/alphasmart/worktrees/mame-post-ir-ram
+timestamp=2026-09-28T09:25:51-06:00
+head=1dc2180181a3b1a21e8761ae40b50a9f55ac4a5b
+branch=diag/post-ir-ram-20260927
+toplevel=/home/spc/Projects/alphasmart/worktrees/mame-post-ir-ram
