@@ -1,0 +1,10 @@
+ M AGENTS.md
+ M src/devices/cpu/mc68hc11/mc68hc11.cpp
+ M src/devices/cpu/mc68hc11/mc68hc11.h
+ M src/mame/skeleton/alphasma.cpp
+?? docs/as2k/GATE1B_INSTRUMENTED_EMULATOR_2026-09-26.md
+?? scripts/as2k_ir_decode.py
+?? scripts/as2k_ir_phy_gate.lua
+?? scripts/as2k_ir_print_to_pdf.py
+?? scripts/as2k_print_to_host.py
+?? scripts/as2k_printer_to_pdf.py
