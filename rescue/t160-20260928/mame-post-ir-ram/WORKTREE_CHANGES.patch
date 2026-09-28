@@ -1,0 +1,2217 @@
+diff --git a/src/devices/cpu/mc68hc11/mc68hc11.cpp b/src/devices/cpu/mc68hc11/mc68hc11.cpp
+index f04a2d8eb61..fa787d52625 100644
+--- a/src/devices/cpu/mc68hc11/mc68hc11.cpp
++++ b/src/devices/cpu/mc68hc11/mc68hc11.cpp
+@@ -70,6 +70,8 @@ mc68hc11_cpu_device::mc68hc11_cpu_device(const machine_config &mconfig, device_t
+ 	, m_analog_cb(*this, 0)
+ 	, m_spi2_data_input_cb(*this, 0xff)
+ 	, m_spi2_data_output_cb(*this)
++	, m_as2k_ir_tx_cb(*this)
++	, m_as2k_ir_event_cb(*this)
+ 	, m_instruction_cb(*this)
+ 	, m_ram_view(*this, "ram")
+ 	, m_reg_view(*this, "regs")
+@@ -261,9 +263,20 @@ uint8_t mc68hc11_cpu_device::pactl_r()
+ 
+ void mc68hc11_cpu_device::pactl_w(uint8_t data)
+ {
++	logerror("AS2K_IR_REG PACTL data=%02X pc=%04X\n", data, m_ppc);
+ 	m_pactl = data & 0x77;
+ }
+ 
++uint8_t mc68hc11_cpu_device::pacnt_r()
++{
++	return m_pacnt;
++}
++
++void mc68hc11_cpu_device::pacnt_w(uint8_t data)
++{
++	m_pacnt = data;
++}
++
+ uint8_t mc68hc11a1_device::pactl_ddra7_r()
+ {
+ 	return (ddr_r<0>() & 0x80) | pactl_r();
+@@ -367,6 +380,10 @@ void mc68hc11_cpu_device::tflg2_w(uint8_t data)
+ 		set_irq_state(0x10, false);
+ 	if (BIT(m_tflg2 & data, 6))
+ 		set_irq_state(0x07, false);
++	if (BIT(m_tflg2 & data, 5))
++		set_irq_state(0x11, false);
++	if (BIT(m_tflg2 & data, 4))
++		set_irq_state(0x12, false);
+ 	m_tflg2 &= ~data;
+ }
+ 
+@@ -377,10 +394,15 @@ uint8_t mc68hc11_cpu_device::tmsk2_r()
+ 
+ void mc68hc11_cpu_device::tmsk2_w(uint8_t data)
+ {
++	logerror("AS2K_IR_REG TMSK2 data=%02X pc=%04X\n", data, m_ppc);
+ 	if (BIT(m_tflg2 & (m_tmsk2 ^ data), 7))
+ 		set_irq_state(0x10, BIT(data, 7));
+ 	if (BIT(m_tflg2 & (m_tmsk2 ^ data), 6))
+ 		set_irq_state(0x07, BIT(data, 6));
++	if (BIT(m_tflg2 & (m_tmsk2 ^ data), 5))
++		set_irq_state(0x11, BIT(data, 5));
++	if (BIT(m_tflg2 & (m_tmsk2 ^ data), 4))
++		set_irq_state(0x12, BIT(data, 4));
+ 
+ 	// TODO: prescaler bits are time-protected
+ 	m_tmsk2 = data;
+@@ -599,6 +621,7 @@ void mc68hc11d0_device::mc68hc11_reg_map(memory_view::memory_view_entry &block,
+ 	block(base + 0x24, base + 0x24).rw(FUNC(mc68hc11d0_device::tmsk2_r), FUNC(mc68hc11d0_device::tmsk2_w)); // TMSK2
+ 	block(base + 0x25, base + 0x25).rw(FUNC(mc68hc11d0_device::tflg2_r), FUNC(mc68hc11d0_device::tflg2_w)); // TFLG2
+ 	block(base + 0x26, base + 0x26).rw(FUNC(mc68hc11d0_device::pactl_ddra_r), FUNC(mc68hc11d0_device::pactl_ddra_w)); // PACTL
++	block(base + 0x27, base + 0x27).rw(FUNC(mc68hc11d0_device::pacnt_r), FUNC(mc68hc11d0_device::pacnt_w)); // PACNT
+ 	block(base + 0x28, base + 0x28).r(FUNC(mc68hc11d0_device::spcr_r<0>)).nopw(); // SPCR
+ 	block(base + 0x29, base + 0x29).r(FUNC(mc68hc11d0_device::spsr_r<0>)).nopw(); // SPSR
+ 	block(base + 0x2a, base + 0x2a).rw(FUNC(mc68hc11d0_device::spdr_r<0>), FUNC(mc68hc11d0_device::spdr_w<0>)); // SPDR
+@@ -708,7 +731,7 @@ void mc68hc11f1_device::mc68hc11_reg_map(memory_view::memory_view_entry &block,
+ 	block(base + 0x24, base + 0x24).rw(FUNC(mc68hc11f1_device::tmsk2_r), FUNC(mc68hc11f1_device::tmsk2_w)); // TMSK2
+ 	block(base + 0x25, base + 0x25).rw(FUNC(mc68hc11f1_device::tflg2_r), FUNC(mc68hc11f1_device::tflg2_w)); // TFLG2
+ 	block(base + 0x26, base + 0x26).rw(FUNC(mc68hc11f1_device::pactl_r), FUNC(mc68hc11f1_device::pactl_w)); // PACTL
+-	block(base + 0x27, base + 0x27).nopw(); // PACNT
++	block(base + 0x27, base + 0x27).rw(FUNC(mc68hc11f1_device::pacnt_r), FUNC(mc68hc11f1_device::pacnt_w)); // PACNT
+ 	block(base + 0x28, base + 0x28).r(FUNC(mc68hc11f1_device::spcr_r<0>)).nopw(); // SPCR
+ 	block(base + 0x29, base + 0x29).r(FUNC(mc68hc11f1_device::spsr_r<0>)).nopw(); // SPSR
+ 	block(base + 0x2a, base + 0x2a).rw(FUNC(mc68hc11f1_device::spdr_r<0>), FUNC(mc68hc11f1_device::spdr_w<0>)); // SPDR
+@@ -868,6 +891,12 @@ void mc68hc11_cpu_device::WRITE16(uint32_t address, uint16_t value)
+ #include "hc11ops.hxx"
+ #include "hc11ops.h"
+ 
++void mc68hc11_cpu_device::device_stop()
++{
++	if (m_as2k_gate1a_probe && m_as2k_gate1a_started)
++		logerror("AS2K_GATE1A PROBE_STOP instructions=%llu\n", static_cast<unsigned long long>(m_as2k_gate1a_instructions));
++}
++
+ void mc68hc11_cpu_device::device_start()
+ {
+ 	int i;
+@@ -925,8 +954,10 @@ void mc68hc11_cpu_device::device_start()
+ 	save_item(NAME(m_tcnt));
+ //  save_item(NAME(m_por));
+ 	save_item(NAME(m_tflg2));
++	save_item(NAME(m_pai_asserted));
+ 	save_item(NAME(m_tmsk2));
+ 	save_item(NAME(m_pactl));
++	save_item(NAME(m_pacnt));
+ 	save_item(NAME(m_frc_base));
+ 	save_item(NAME(m_reset_time));
+ 	save_item(NAME(m_port_data));
+@@ -1026,8 +1057,10 @@ void mc68hc11_cpu_device::device_reset()
+ 	m_tctl2 = 0;
+ 	m_tflg1 = 0;
+ 	m_tflg2 = 0;
++	m_pai_asserted = false;
+ 	m_tmsk2 = 3; // timer prescale
+ 	m_pactl = 0;
++	m_pacnt = 0;
+ 	m_irq_state = 0x80000000 | (m_irq_state & 0x04000000);
+ 	if (m_irq_asserted)
+ 		set_irq_state(0x06, true);
+@@ -1218,6 +1251,32 @@ void mc68hc11_cpu_device::execute_set_input(int inputnum, int state)
+ 		set_irq_state(0x05, state != CLEAR_LINE);
+ 		break;
+ 
++	case MC68HC11_PAI_LINE:
++	{
++		bool const level = state != CLEAR_LINE;
++		bool const rising = !m_pai_asserted && level;
++		bool const falling = m_pai_asserted && !level;
++		m_pai_asserted = level;
++		if ((BIT(m_pactl, 4) && rising) || (!BIT(m_pactl, 4) && falling))
++		{
++			m_tflg2 |= 0x10;
++			if (BIT(m_tmsk2, 4))
++				set_irq_state(0x12, true);
++
++			// Event-count mode: PA7 active edges increment the pulse accumulator.
++			if (BIT(m_pactl, 6) && !BIT(m_pactl, 5))
++			{
++				if (++m_pacnt == 0)
++				{
++					m_tflg2 |= 0x20;
++					if (BIT(m_tmsk2, 5))
++						set_irq_state(0x11, true);
++				}
++			}
++		}
++		break;
++	}
++
+ 	default:
+ 		logerror("Unknown input %d = %d\n", inputnum, state);
+ 		break;
+@@ -1241,6 +1300,140 @@ void mc68hc11_cpu_device::execute_run()
+ 		{
+ 			m_ppc = m_pc;
+ 			m_instruction_cb(m_pc);
++			// Gate 1A instruction-PC observer; no debugger, opcode or firmware changes.
++			if (m_as2k_gate1a_probe)
++			{
++				if (!m_as2k_gate1a_started)
++				{
++					m_as2k_gate1a_started = true;
++					logerror("AS2K_GATE1A PROBE_ACTIVE\n");
++				}
++				++m_as2k_gate1a_instructions;
++				if ((m_as2k_gate1a_instructions & 0x3ffff) == 0)
++					logerror("AS2K_GATE1A HEARTBEAT instructions=%llu\n", static_cast<unsigned long long>(m_as2k_gate1a_instructions));
++				const uint16_t pc = m_ppc;
++				// Complete-session PC coverage.  Start at the stock Send/IrDA
++				// application entry and stop at its stock return.  The receive
++				// fixture deliberately uses this same unmodified firmware path.
++				if (pc == 0xd2dc)
++				{
++					m_as2k_ir_pc_coverage.reset();
++					m_as2k_ir_coverage_active = true;
++					logerror("AS2K_IR_COVERAGE START pc=%04X\n", pc);
++				}
++				if (m_as2k_ir_coverage_active)
++					m_as2k_ir_pc_coverage.set(pc);
++				if (m_as2k_ir_coverage_active && pc == 0x9719)
++				{
++					logerror("AS2K_IR_COVERAGE END unique=%zu\n", m_as2k_ir_pc_coverage.count());
++					for (unsigned covered = 0; covered < 0x10000; ++covered)
++						if (m_as2k_ir_pc_coverage.test(covered))
++							logerror("AS2K_IR_COVERAGE PC=%04X\n", covered);
++					m_as2k_ir_coverage_active = false;
++				}
++				// Receive-path milestones selected from the stock firmware/Ghidra
++				// call graph.  They are bounded semantic observations, not hooks.
++				if (pc == 0xd0e0 || pc == 0xd107 || pc == 0xd166 || pc == 0xe58c ||
++					pc == 0xfd22 || pc == 0xe33e || pc == 0xe468 || pc == 0xe1fb ||
++					pc == 0x9f74 || pc == 0xe4ad)
++				{
++					static unsigned rx_marker_events = 0;
++					if (rx_marker_events < 256)
++					{
++						logerror("AS2K_IR_RX_MARK pc=%04X a=%02X b=%02X x=%04X y=%04X sp=%04X\n",
++							pc, m_d.d8.a, m_d.d8.b, m_ix, m_iy, m_sp);
++						++rx_marker_events;
++					}
++				}
++				// DIAG-only IrDA observation at firmware-defined byte/session boundaries.
++				// D1EF is the actual STAB $05BA enqueue, not D1EA (which spins while busy).
++				// This is passive: it does not alter registers, RAM, IRQs or timer state.
++				if (pc == 0xd1ef)
++					m_as2k_ir_tx_cb(m_d.d8.b);
++				else if (pc == 0xd220)
++					m_as2k_ir_event_cb(0x01); // transmitter drained / frame-level wait complete
++				else if (pc == 0xd0d7)
++					m_as2k_ir_event_cb(0x30); // IrDA init complete, just before D099 returns
++				else if (pc == 0xd2dc)
++					m_as2k_ir_event_cb(0x10); // Send IrDA session entry
++				else if (pc == 0x9719)
++					m_as2k_ir_event_cb(0x11); // Send IrDA session return
++				else if (pc == 0xd437)
++					m_as2k_ir_event_cb(0x20); // Print IrDA session entry
++				else if (pc == 0xd47d)
++					m_as2k_ir_event_cb(0x21); // Print IrDA session return
++				// DIAG-only bounded IrDA application-path markers.  These are read-only
++				// observations used to verify that the virtual optical peer reaches the
++				// stock IrLMP/TinyTP/application callbacks without modifying firmware state.
++				if (pc == 0xfd22 || pc == 0xf80a || pc == 0xe33e || pc == 0xe3d5 || pc == 0xe492)
++					logerror("AS2K_IR_APP pc=%04X a=%02X b=%02X x=%04X y=%04X sp=%04X\n", pc, m_d.d8.a, m_d.d8.b, m_ix, m_iy, m_sp);
++				static bool ir_ffff_logged = false;
++				if (pc == 0xffff && !ir_ffff_logged)
++				{
++					ir_ffff_logged = true;
++					logerror("AS2K_IR_APP pc=FFFF a=%02X b=%02X x=%04X y=%04X sp=%04X\n", m_d.d8.a, m_d.d8.b, m_ix, m_iy, m_sp);
++				}
++
++				if ((pc >= 0xd098 && pc <= 0xd487) ||
++					(pc >= 0xd499 && pc <= 0xd517) ||
++					(pc >= 0xe104 && pc <= 0xffbf))
++				{
++					if (!m_as2k_gate1a_forbidden_seen)
++					{
++						m_as2k_gate1a_forbidden_seen = true;
++						logerror("AS2K_GATE1A FORBIDDEN_PC=%04X\n", pc);
++						// Gate 1B: first forbidden PC plus the 32 immediately preceding executed PCs.
++						logerror("AS2K_GATE1B FIRST_ENTRY_PC=%04X HISTORY_COUNT=%u INSTRUCTIONS=%llu\n", pc, m_as2k_gate1b_pc_history_count, static_cast<unsigned long long>(m_as2k_gate1a_instructions));
++						for (unsigned i = 0; i < m_as2k_gate1b_pc_history_count; ++i)
++						{
++							const unsigned idx = (m_as2k_gate1b_pc_history_pos + 32 - m_as2k_gate1b_pc_history_count + i) % 32;
++							logerror("AS2K_GATE1B PREVIOUS_PC[%u]=%04X\n", i, m_as2k_gate1b_pc_history[idx]);
++						}
++					}
++				}
++				m_as2k_gate1b_pc_history[m_as2k_gate1b_pc_history_pos] = pc;
++				m_as2k_gate1b_pc_history_pos = (m_as2k_gate1b_pc_history_pos + 1) % 32;
++				if (m_as2k_gate1b_pc_history_count < 32) ++m_as2k_gate1b_pc_history_count;
++				if ((pc == 0xe102 || pc == 0xe103) && !m_as2k_gate1a_metadata_seen)
++				{
++					m_as2k_gate1a_metadata_seen = true;
++					logerror("AS2K_GATE1A PROTECTED_METADATA_PC=%04X\n", pc);
++				}
++				// Gate 1A DIAG: reserve evidence for the exit; never flood on $85B4.
++				if (pc == 0x8067 || pc == 0x806b || pc == 0x85a1 || pc == 0x85b4 || pc == 0x85be || pc == 0x85c2 || pc == 0x85c3 || pc == 0x85c4 || pc == 0x85c5 || pc == 0x806e || pc == 0x8070 || pc == 0x8078 || pc == 0x80d4)
++				{
++					static unsigned host_probe_events = 0;
++					static unsigned host_probe_poll_count = 0;
++					static bool host_probe_poll_logged = false;
++					static bool host_probe_wait_logged = false;
++					if (pc == 0x85b4) ++host_probe_poll_count;
++					if (host_probe_events < 96 && (pc != 0x85b4 || !host_probe_poll_logged) && (pc != 0x85be || !host_probe_wait_logged))
++					{
++						logerror("AS2K_GATE1A HOST_PROBE pc=%04X ccr=%02X tflg1=%02X polls=%u events=%u\n", pc, m_ccr, m_tflg1, host_probe_poll_count, host_probe_events);
++						++host_probe_events;
++						if (pc == 0x85b4) host_probe_poll_logged = true;
++						if (pc == 0x85be) host_probe_wait_logged = true;
++					}
++				}
++				switch (pc)
++				{
++				case 0x9716: logerror("AS2K_GATE1A SEND_REDIRECT PC=%04X\n", pc); break;
++				case 0x8606: logerror("AS2K_GATE1A SEND_CABLE PC=%04X\n", pc); break;
++				case 0x962d: logerror("AS2K_GATE1A PRINT_DETACH_962D PC=%04X\n", pc); break;
++				case 0x9804: logerror("AS2K_GATE1A PRINT_DETACH_9804 PC=%04X\n", pc); break;
++				case 0xabc9: logerror("AS2K_GATE1A PRINT_FALLBACK PC=%04X\n", pc); break;
++				case 0xd2dc: logerror("AS2K_GATE1A FAIL_IR_SEND_D2DC PC=%04X\n", pc); break;
++				case 0xd099: logerror("AS2K_GATE1A FAIL_IR_SEND_D099 PC=%04X\n", pc); break;
++				case 0xd437: logerror("AS2K_GATE1A FAIL_IR_PRINT_D437 PC=%04X\n", pc); break;
++				case 0xd488:
++					if (!m_as2k_gate1a_shared_seen)
++					{
++						m_as2k_gate1a_shared_seen = true;
++						logerror("AS2K_GATE1A RETAINED_SHARED_HELPER PC=%04X\n", pc);
++					}
++					break;
++				}
++			}
+ 			debugger_instruction_hook(m_pc);
+ 
+ 			op = FETCH();
+diff --git a/src/devices/cpu/mc68hc11/mc68hc11.h b/src/devices/cpu/mc68hc11/mc68hc11.h
+index bc06cc26760..2d84d8f6502 100644
+--- a/src/devices/cpu/mc68hc11/mc68hc11.h
++++ b/src/devices/cpu/mc68hc11/mc68hc11.h
+@@ -5,10 +5,13 @@
+ 
+ #pragma once
+ 
++#include <bitset>
++
+ 
+ enum {
+ 	MC68HC11_IRQ_LINE           = 0,
+-	MC68HC11_XIRQ_LINE          = 1
++	MC68HC11_XIRQ_LINE          = 1,
++	MC68HC11_PAI_LINE           = 2
+ };
+ 
+ DECLARE_DEVICE_TYPE(MC68HC11A1, mc68hc11a1_device)
+@@ -49,15 +52,21 @@ public:
+ 	auto in_an7_callback() { return m_analog_cb[7].bind(); }
+ 	auto in_spi2_data_callback() { return m_spi2_data_input_cb.bind(); }
+ 	auto out_spi2_data_callback() { return m_spi2_data_output_cb.bind(); }
++	// AS2000 DIAG-only logical IrDA observer hooks.
++	auto as2k_ir_tx_callback() { return m_as2k_ir_tx_cb.bind(); }
++	auto as2k_ir_event_callback() { return m_as2k_ir_event_cb.bind(); }
+ 	auto instruction_callback() { return m_instruction_cb.bind(); }
+ 
+ 	void set_default_config(uint8_t data) { assert(!configured()); m_config = data & m_config_mask; }
++	// Enabled only by the AS2000 Gate 1A diagnostic driver in this isolated build.
++	void set_as2k_gate1a_probe(bool enabled) { assert(!configured()); m_as2k_gate1a_probe = enabled; }
+ 
+ protected:
+ 	mc68hc11_cpu_device(const machine_config &mconfig, device_type type, const char *tag, device_t *owner, uint32_t clock, uint16_t ram_size, uint16_t reg_block_size, uint16_t rom_size, uint16_t eeprom_size, uint8_t init_value, uint8_t config_mask, uint8_t option_mask);
+ 
+ 	// device_t implementation
+ 	virtual void device_start() override ATTR_COLD;
++	virtual void device_stop() override ATTR_COLD;
+ 	virtual void device_reset() override ATTR_COLD;
+ 
+ 	// device_execute_interface implementation
+@@ -109,6 +118,8 @@ protected:
+ 	void tmsk2_w(uint8_t data);
+ 	uint8_t pactl_r();
+ 	void pactl_w(uint8_t data);
++	uint8_t pacnt_r();
++	void pacnt_w(uint8_t data);
+ 	uint8_t pactl_ddra_r();
+ 	void pactl_ddra_w(uint8_t data);
+ 	template <int N> uint8_t spcr_r();
+@@ -156,6 +167,20 @@ private:
+ 	uint16_t m_sp;
+ 	uint16_t m_pc;
+ 	uint16_t m_ppc;
++	bool m_as2k_gate1a_probe = false;
++	bool m_as2k_gate1a_started = false;
++	bool m_as2k_gate1a_forbidden_seen = false;
++	// DIAG-only bounded pre-entry history for Gate 1B; no firmware side effects.
++	uint16_t m_as2k_gate1b_pc_history[32] = {};
++	unsigned m_as2k_gate1b_pc_history_pos = 0;
++	unsigned m_as2k_gate1b_pc_history_count = 0;
++	bool m_as2k_gate1a_metadata_seen = false;
++	bool m_as2k_gate1a_shared_seen = false;
++	uint64_t m_as2k_gate1a_instructions = 0;
++	// DIAG-only dynamic PC coverage for a complete IrDA application session.
++	// It is observational state and is deliberately not save-stated.
++	bool m_as2k_ir_coverage_active = false;
++	std::bitset<0x10000> m_as2k_ir_pc_coverage;
+ 	uint8_t m_ccr;
+ 
+ protected:
+@@ -168,6 +193,7 @@ private:
+ 
+ 	uint32_t m_irq_state;
+ 	bool m_irq_asserted;
++	bool m_pai_asserted;
+ 
+ 	memory_access<16, 0, 0, ENDIANNESS_BIG>::cache m_cache;
+ 	memory_access<16, 0, 0, ENDIANNESS_BIG>::specific m_program;
+@@ -176,6 +202,8 @@ private:
+ 	devcb_read8::array<8> m_analog_cb;
+ 	devcb_read8 m_spi2_data_input_cb;
+ 	devcb_write8 m_spi2_data_output_cb;
++	devcb_write8 m_as2k_ir_tx_cb;
++	devcb_write8 m_as2k_ir_event_cb;
+ 	devcb_write16 m_instruction_cb;
+ 	int m_icount;
+ 
+@@ -205,6 +233,7 @@ private:
+ 	uint8_t m_tflg2;
+ 	uint8_t m_tmsk2;
+ 	uint8_t m_pactl;
++	uint8_t m_pacnt;
+ 	uint8_t m_init;
+ 	uint8_t m_init2;
+ 
+diff --git a/src/mame/skeleton/alphasma.cpp b/src/mame/skeleton/alphasma.cpp
+index b8b5db15886..62c43508f06 100644
+--- a/src/mame/skeleton/alphasma.cpp
++++ b/src/mame/skeleton/alphasma.cpp
+@@ -22,6 +22,16 @@
+ #include "video/hd44780.h"
+ #include "emupal.h"
+ #include "screen.h"
++#include <array>
++#include <chrono>
++#include <unordered_set>
++
++#if defined(__linux__)
++#include <spawn.h>
++#include <sys/wait.h>
++#include <unistd.h>
++extern "C" { extern char **environ; }
++#endif
+ 
+ 
+ namespace {
+@@ -83,35 +93,142 @@ public:
+ 		: alphasmart_state(mconfig, type, tag)
+ 		, m_io_view(*this, "io")
+ 		, m_dictbank(*this, "dictbank")
+-		, m_pc_connected(*this, "PC_CONNECTED")
++		, m_ir_pai(*this, "IR_PAI")
++		, m_ir_rx_fixture(*this, "IR_RX_FIXTURE")
++		, m_printer_ready(*this, "PRINTER_READY")
+ 	{
+ 	}
+ 
+ 	void asma2k(machine_config &config);
++	INPUT_CHANGED_MEMBER(ir_pai_changed);
++	INPUT_CHANGED_MEMBER(accessory_mode_changed);
++	INPUT_CHANGED_MEMBER(accessory_action_changed);
+ 
+ protected:
+ 	virtual void machine_start() override ATTR_COLD;
++	virtual void machine_reset() override ATTR_COLD;
+ 
+ private:
+ 	void lcd_ctrl_w(uint8_t data);
+ 	uint8_t asma2k_port_a_r();
++	void asma2k_port_d_w(uint8_t data);
++	void printer_capture_end(bool submit = false);
++	void printer_submit_host(std::string const &trace_path);
++	void ir_tx_byte_w(uint8_t data);
++	void ir_event_w(uint8_t event);
++	void gate1b_p0c_pc_w(uint16_t pc);
++	void gate1b_install_memory_probes();
++	void gate1b_memory_read(unsigned probe, offs_t address, uint8_t data);
++	void gate1b_pointer_write(offs_t address, uint8_t data);
++	bool gate1b_tracked_ram_byte(offs_t address) const;
++	void postir_ram_access(bool is_write, offs_t address);
++	void postir_install_ram_probes();
++	void ir_capture_begin(char const *kind);
++	void ir_capture_end(char const *reason);
++	void ir_frame_byte(uint8_t data);
++	void ir_peer_begin();
++	void ir_peer_stop();
++	void ir_print_capture_close(bool render_pdf = false);
++	void ir_print_render_pdf(std::string const &pcl_path);
++	void ir_postload();
++	void ir_peer_send_xid();
++	void ir_peer_send_xid_response();
++	void ir_peer_send_snrm();
++	void ir_peer_send_ua();
++	void ir_peer_send_rr(uint8_t nr, bool final_bit);
++	void ir_peer_send_i(std::vector<uint8_t> const &info);
++	void ir_peer_send_frame(std::vector<uint8_t> const &body);
++	void ir_peer_on_tx_frame(std::vector<uint8_t> const &frame);
++	void ir_peer_drive(bool high);
++	TIMER_CALLBACK_MEMBER(ir_peer_timer);
+ 	virtual void port_a_w(uint8_t data) override;
+-	void send_pc_w(uint16_t pc);
+-	void send_sink_begin();
+-	void send_sink_byte(uint8_t data);
+-	void send_sink_end();
+ 
+ 	void asma2k_mem(address_map &map) ATTR_COLD;
+ 
+ 	memory_view m_io_view;
+ 	required_memory_bank m_dictbank;
+-	required_ioport m_pc_connected;
++	required_ioport m_ir_pai;
++	required_ioport m_ir_rx_fixture;
++	required_ioport m_printer_ready;
+ 
+ 	uint8_t m_lcd_ctrl;
+-	bool m_send_sink_active = false;
+-	bool m_send_sink_break = false;
+-	bool m_send_sink_shift = false;
+-	std::unique_ptr<emu_file> m_send_sink;
++	std::unique_ptr<emu_file> m_printer_trace;
++	uint64_t m_printer_edges = 0;
++	bool m_printer_trace_capped = false;
++	uint8_t m_connection_mode = 0; // 0=none/IR, 1=printer, 2=PC, 3=Mac reserved.
++	bool m_mode_disconnect_next = false;
++	bool m_printer_capture_armed = false;
++	std::unique_ptr<emu_file> m_ir_raw;
++	std::unique_ptr<emu_file> m_ir_text;
++	std::unique_ptr<emu_file> m_ir_print_pcl;
++	uint32_t m_ir_print_bytes = 0;
++	bool m_ir_print_complete = false;
++	bool m_ir_capture_active = false;
++	bool m_ir_frame_active = false;
++	bool m_ir_escape = false;
++	uint32_t m_ir_session_bytes = 0;
++	uint32_t m_ir_frame_count = 0;
++	std::vector<uint8_t> m_ir_frame;
++
++	// DIAG virtual IrDA peer.  It drives the existing PA7/PAI receiver at the
++	// measured firmware bit period; no RAM/PC/register state is fabricated.
++	emu_timer *m_ir_peer_timer = nullptr;
++	std::vector<uint8_t> m_ir_peer_raw;
++	size_t m_ir_peer_byte = 0;
++	uint8_t m_ir_peer_bit = 0;
++	bool m_ir_peer_pulse_end = false;
++	bool m_ir_peer_active = false;
++	bool m_ir_peer_level = true;
++	bool m_ir_peer_send_session = false;
++	bool m_ir_peer_print_session = false;
++	bool m_ir_peer_primary = true;
++	bool m_ir_peer_print_discovery_replied = false;
++	bool m_ir_peer_file_receive = false;
++	bool m_ir_peer_receive_fixture = false;
++	uint8_t m_ir_peer_receive_phase = 0;
++	uint32_t m_ir_peer_text_bytes = 0;
++	uint8_t m_ir_peer_stage = 0;
++	uint8_t m_ir_peer_xid_slot = 0;
++	uint8_t m_ir_peer_pending = 0;
++	uint8_t m_ir_peer_nr = 0;
++	uint8_t m_ir_peer_ns = 0;
++	uint8_t m_ir_peer_connection_address = 0x02;
++	uint32_t m_ir_peer_target = 0;
++	uint8_t m_gate_key_probe_id = 0;
++	uint16_t m_gate_key_trace_left = 0;
++	uint16_t m_gate_key_trace_seq = 0;
++	bool m_gate_spell_down = false;
++	bool m_gate_find_down = false;
++
++	// Gate 1B/1V passive provenance probes. These wrap the AS_PROGRAM space
++	// without changing firmware-visible data, timing, registers or control flow.
++	memory_passthrough_handler m_gate1b_w1_tap;
++	memory_passthrough_handler m_gate1b_w2_tap;
++	memory_passthrough_handler m_gate1b_w3_tap;
++	memory_passthrough_handler m_gate1b_quarantine_tap;
++	memory_passthrough_handler m_gate1b_w4_tap;
++	memory_passthrough_handler m_gate1b_ctrl_d079_tap;
++	memory_passthrough_handler m_gate1b_ctrl_e0_tap;
++	memory_passthrough_handler m_gate1b_ctrl_d8_tap;
++	memory_passthrough_handler m_gate1b_ram_write_tap;
++	memory_passthrough_handler m_postir_ram_read_tap;
++	memory_passthrough_handler m_postir_ram_write_tap;
++	std::array<uint64_t, 0xc0> m_postir_ram_reads{};
++	std::array<uint64_t, 0xc0> m_postir_ram_writes{};
++	std::unordered_set<uint32_t> m_postir_ram_seen;
++	uint64_t m_postir_ram_total_reads = 0;
++	uint64_t m_postir_ram_total_writes = 0;
++	uint16_t m_gate1b_current_pc = 0;
++	uint64_t m_gate1b_instructions = 0;
++	uint64_t m_gate1b_w1_reads = 0;
++	uint64_t m_gate1b_w2_reads = 0;
++	uint64_t m_gate1b_w3_reads = 0;
++	uint64_t m_gate1b_quarantine_reads = 0;
++	uint64_t m_gate1b_w4_reads = 0;
++	uint64_t m_gate1b_ctrl_d079_reads = 0;
++	uint64_t m_gate1b_ctrl_e0_reads = 0;
++	uint64_t m_gate1b_ctrl_d8_reads = 0;
++	uint64_t m_gate1b_tracked_writes = 0;
+ };
+ 
+ INPUT_CHANGED_MEMBER(alphasmart_state::kb_irq)
+@@ -210,165 +327,1189 @@ void asma2k_state::lcd_ctrl_w(uint8_t data)
+ 	m_lcd_ctrl = data;
+ }
+ 
++INPUT_CHANGED_MEMBER(asma2k_state::ir_pai_changed)
++{
++	if (!m_ir_peer_active)
++		m_maincpu->set_input_line(MC68HC11_PAI_LINE, newval ? ASSERT_LINE : CLEAR_LINE);
++}
++
++INPUT_CHANGED_MEMBER(asma2k_state::accessory_mode_changed)
++{
++	if (!newval)
++		return; // One action per rising key press, not release.
++	uint8_t const next = (m_mode_disconnect_next || m_connection_mode == 3)
++		? 0 : m_connection_mode + 1;
++	if (m_connection_mode == 1)
++		printer_capture_end(next == 0 && m_printer_capture_armed);
++	m_connection_mode = next;
++	m_mode_disconnect_next = false;
++	m_printer_capture_armed = false;
++	static constexpr char const *labels[] = {
++		"Disconnected (IR available)", "Wired printer", "PC keyboard",
++		"Mac reserved: electrical interface unverified" };
++	logerror("AS2K_CONNECT_MODE selected=%u %s\n", m_connection_mode, labels[m_connection_mode]);
++	popmessage("AlphaSmart: %s", labels[m_connection_mode]);
++}
++
++INPUT_CHANGED_MEMBER(asma2k_state::accessory_action_changed)
++{
++	// Preserve the original keyboard IRQ; this callback replaces kb_irq only
++	// on the existing AS2000 Send/Print input fields.
++	m_maincpu->set_input_line(MC68HC11_IRQ_LINE, ASSERT_LINE);
++	if (newval)
++		return; // Active-low key: mark on press, not release.
++	if (param == 1 && m_connection_mode == 1) // Print
++	{
++		m_mode_disconnect_next = true;
++		m_printer_capture_armed = true;
++	}
++	else if (param == 2 && (m_connection_mode == 2 || m_connection_mode == 3)) // Send
++		m_mode_disconnect_next = true;
++}
++
+ uint8_t asma2k_state::asma2k_port_a_r()
+ {
+ 	uint8_t data = (m_port_a & 0xfd) | (m_battery_status->read() << 1);
+-	if (BIT(m_pc_connected->read(), 0))
+-		data |= 0x05; // PC attached: PA2 asserted, PA0 idle high
++	// These are *external input* levels. CPU DDR preserves actual GPIO outputs.
++	// Do not treat Macintosh as the unverified fourth PA0/PA2 binary pattern:
++	// stock firmware uses a separate RAM 008A flag after host negotiation.
++	data &= ~uint8_t(0x05);
++	if (m_connection_mode == 2)
++		data |= 0x05; // Known PC case: PA2 and idle PA0 high.
++	else if (m_connection_mode == 1 && BIT(m_printer_ready->read(), 0))
++		data |= 0x01; // Known printer case: PA0 high, PA2 low.
++	if (m_connection_mode != 1)
++		printer_capture_end();
++	// PA7 is the IrDA receiver / pulse accumulator input.  Keep the GPIO
++	// readback electrically coherent with the PAI input seen by the CPU.
++	bool const ir_high = m_ir_peer_active ? m_ir_peer_level : BIT(m_ir_pai->read(), 0);
++	data = (data & 0x7f) | (ir_high ? 0x80 : 0x00);
+ 	return data;
+ }
+ 
+-void asma2k_state::send_sink_begin()
++void asma2k_state::printer_capture_end(bool submit)
++{
++	if (m_printer_trace)
++	{
++		std::string const path = m_printer_trace->fullpath();
++		m_printer_trace->flush();
++		m_printer_trace->close();
++		m_printer_trace.reset();
++		logerror("AS2K_PRINT_PHY CAPTURE_CLOSE edges=%llu capped=%u\n",
++			static_cast<unsigned long long>(m_printer_edges), m_printer_trace_capped ? 1 : 0);
++		if (submit && !m_printer_trace_capped && m_printer_edges)
++			printer_submit_host(path); // Explicit disconnect AFTER Print, never at keypress.
++	}
++	m_printer_edges = 0;
++	m_printer_trace_capped = false;
++}
++
++void asma2k_state::printer_submit_host(std::string const &trace_path)
+ {
+-	if (m_send_sink)
++#if defined(__linux__)
++	// Linux DIAG-only host adapter. The helper validates the captured PCL
++	// before delivering *text/plain* to the default CUPS destination.
++	// Resolve beside this same DIAG executable: no extra MAME builds.
++	char executable[4096];
++	ssize_t const count = ::readlink("/proc/self/exe", executable, sizeof(executable) - 1);
++	if (count <= 0)
++	{
++		logerror("AS2K_PRINT_HOST FAILED reason=cannot_locate_diag_executable\n");
++		return;
++	}
++	executable[count] = 0;
++	std::string const binary_path(executable);
++	auto const slash = binary_path.find_last_of('/');
++	std::string const helper = binary_path.substr(0, slash) + "/scripts/as2k_print_to_host.py";
++	if (::access(helper.c_str(), R_OK) != 0)
++	{
++		logerror("AS2K_PRINT_HOST FAILED reason=missing_helper path=%s\n", helper);
++		return;
++	}
++	char *const args[] = { const_cast<char *>("/usr/bin/python3"),
++		const_cast<char *>(helper.c_str()), const_cast<char *>(trace_path.c_str()), nullptr };
++	pid_t pid;
++	int const error = ::posix_spawn(&pid, "/usr/bin/python3", nullptr, nullptr, args, environ);
++	if (error)
++	{
++		logerror("AS2K_PRINT_HOST FAILED reason=spawn_error code=%d\n", error);
++		return;
++	}
++	int status = 0;
++	if (::waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status))
+ 	{
+-		m_send_sink->close();
+-		m_send_sink.reset();
++		logerror("AS2K_PRINT_HOST FAILED reason=helper_exit status=%d raw_preserved=%s\n",
++			status, trace_path);
++		popmessage("AlphaSmart: host printing failed; RAW trace preserved");
+ 	}
++	else
++	{
++		logerror("AS2K_PRINT_HOST SUBMITTED trace=%s\n", trace_path);
++		popmessage("AlphaSmart: print job submitted to host");
++	}
++#else
++	logerror("AS2K_PRINT_HOST unavailable_on_this_platform trace=%s\n", trace_path);
++#endif
++}
+ 
++void asma2k_state::asma2k_port_d_w(uint8_t data)
++{
++	uint8_t const previous = m_port_d;
++	alphasmart_state::port_d_w(data); // Preserve base port behavior.
++
++	// Passive recorder: MAME calls this for physical PORTD output changes.
++	// Same-level consecutive bits are reconstructed later from timing, not
++	// from a firmware-PC hook or a fabricated byte/event callback.
++	if (m_connection_mode != 1 || !m_printer_capture_armed || !BIT(m_printer_ready->read(), 0))
++	{
++		printer_capture_end();
++		return;
++	}
++	if (!(BIT(previous ^ data, 0)) || m_printer_trace_capped)
++		return;
++
++	if (!m_printer_trace)
++	{
++		std::string rom_directory;
++		path_iterator rom_paths(machine().options().media_path());
++		if (!rom_paths.next(rom_directory) || rom_directory.empty())
++		{
++			logerror("AS2K_PRINT_PHY CAPTURE_OPEN_FAILED reason=no_rom_directory\n");
++			m_printer_trace_capped = true;
++			return;
++		}
++		m_printer_trace = std::make_unique<emu_file>(
++			rom_directory, OPEN_FLAG_WRITE | OPEN_FLAG_CREATE | OPEN_FLAG_CREATE_PATHS);
++		// Do not overwrite the evidence of a previous run or print job.
++		auto const instant = std::chrono::duration_cast<std::chrono::microseconds>(
++			std::chrono::system_clock::now().time_since_epoch()).count();
++		std::string const capture_name = util::string_format(
++			"printer-pd0-edges-%lld.tsv", static_cast<long long>(instant));
++		std::error_condition const err = m_printer_trace->open(capture_name);
++		if (err)
++		{
++			logerror("AS2K_PRINT_PHY CAPTURE_OPEN_FAILED error=%s\n", err.message());
++			m_printer_trace.reset();
++			m_printer_trace_capped = true;
++			return;
++		}
++		static constexpr char const header[] =
++			"# AS2K DIAG: physical PORTD edges, E-clock ticks at 2000000 Hz\n"
++			"# ticks\tprevious_PD0_PD1\tPD0_PD1\n";
++		m_printer_trace->write(header, sizeof(header) - 1);
++		logerror("AS2K_PRINT_PHY CAPTURE_OPEN path=%s\n", m_printer_trace->fullpath());
++	}
++	// Cap transition evidence; this is a bounded DIAG probe, not printer emulation.
++	if (m_printer_edges >= 200'000)
++	{
++		logerror("AS2K_PRINT_PHY CAPTURE_LIMIT edges=%llu\n",
++			static_cast<unsigned long long>(m_printer_edges));
++		m_printer_trace_capped = true;
++		m_printer_trace->flush();
++		return;
++	}
++	std::string const line = util::string_format("%llu\t%u\t%u\n",
++		static_cast<unsigned long long>(machine().time().as_ticks(2'000'000)),
++		unsigned(previous & 0x03), unsigned(data & 0x03));
++	m_printer_trace->write(line.data(), line.size());
++	++m_printer_edges;
++}
++
++void asma2k_state::ir_capture_begin(char const *kind)
++{
++	ir_capture_end("restart");
+ 	std::string rom_directory;
+ 	path_iterator rom_paths(machine().options().media_path());
+ 	if (!rom_paths.next(rom_directory) || rom_directory.empty())
+ 	{
+-		logerror("AS2K_TX TEXT_SINK_OPEN_FAILED reason=no_rom_directory\n");
+-		m_send_sink_active = false;
++		logerror("AS2K_IR CAPTURE_OPEN_FAILED reason=no_rom_directory\n");
+ 		return;
+ 	}
++	m_ir_raw = std::make_unique<emu_file>(rom_directory, OPEN_FLAG_WRITE | OPEN_FLAG_CREATE | OPEN_FLAG_CREATE_PATHS);
++	auto const instant = std::chrono::duration_cast<std::chrono::microseconds>(
++		std::chrono::system_clock::now().time_since_epoch()).count();
++	std::string const name = util::string_format("irda-%s-raw-%lld.bin", kind, static_cast<long long>(instant));
++	std::error_condition const err = m_ir_raw->open(name);
++	if (err)
++	{
++		logerror("AS2K_IR CAPTURE_OPEN_FAILED error=%s\n", err.message());
++		m_ir_raw.reset();
++		return;
++	}
++	m_ir_capture_active = true;
++	m_ir_frame_active = false;
++	m_ir_escape = false;
++	m_ir_session_bytes = 0;
++	m_ir_frame_count = 0;
++	m_ir_frame.clear();
++	logerror("AS2K_IR CAPTURE_OPEN kind=%s path=%s\n", kind, m_ir_raw->fullpath());
++}
+ 
+-	m_send_sink = std::make_unique<emu_file>(
+-		rom_directory,
+-		OPEN_FLAG_WRITE | OPEN_FLAG_CREATE | OPEN_FLAG_CREATE_PATHS);
++void asma2k_state::ir_capture_end(char const *reason)
++{
++	if (m_ir_raw)
++	{
++		m_ir_raw->flush();
++		m_ir_raw->close();
++		m_ir_raw.reset();
++	}
++	if (m_ir_capture_active)
++		logerror("AS2K_IR CAPTURE_CLOSE reason=%s bytes=%u frames=%u partial=%u\n",
++			reason, m_ir_session_bytes, m_ir_frame_count, m_ir_frame_active ? 1U : 0U);
++	m_ir_capture_active = false;
++	m_ir_frame_active = false;
++	m_ir_escape = false;
++	m_ir_frame.clear();
++}
+ 
+-	std::error_condition const err = m_send_sink->open("send.txt");
+-	if (err)
++void asma2k_state::ir_frame_byte(uint8_t data)
++{
++	if (!m_ir_frame_active)
+ 	{
+-		logerror("AS2K_TX TEXT_SINK_OPEN_FAILED path=%s%s%s error=%s\n",
+-			rom_directory,
+-			PATH_SEPARATOR,
+-			"send.txt",
+-			err.message());
+-		m_send_sink.reset();
+-		m_send_sink_active = false;
++		if (data == 0xc0)
++		{
++			m_ir_frame_active = true;
++			m_ir_escape = false;
++			m_ir_frame.clear();
++		}
++		return; // FF preamble/noise before C0 is retained in RAW only.
+ 	}
+-	else
++
++	if (m_ir_escape)
+ 	{
+-		logerror("AS2K_TX TEXT_SINK_OPEN path=%s\n", m_send_sink->fullpath());
+-		m_send_sink_active = true;
++		m_ir_frame.push_back(data ^ 0x20);
++		m_ir_escape = false;
++		return;
+ 	}
++	if (data == 0x7d)
++	{
++		m_ir_escape = true;
++		return;
++	}
++	if (data == 0xc1)
++	{
++		++m_ir_frame_count;
++		std::string hex;
++		for (uint8_t const value : m_ir_frame)
++			hex += util::string_format("%02X", value);
++		logerror("AS2K_IR FRAME index=%u payload_len=%u payload=%s\n",
++			m_ir_frame_count, unsigned(m_ir_frame.size()), hex);
++		ir_peer_on_tx_frame(m_ir_frame);
++		m_ir_frame_active = false;
++		m_ir_escape = false;
++		m_ir_frame.clear();
++		return;
++	}
++	if (data == 0xc0)
++	{
++		// Resynchronise deterministically on a new opening delimiter.
++		logerror("AS2K_IR FRAME_RESYNC partial_len=%u\n", unsigned(m_ir_frame.size()));
++		m_ir_frame.clear();
++		m_ir_escape = false;
++		return;
++	}
++	m_ir_frame.push_back(data);
++}
+ 
+-	m_send_sink_break = false;
+-	m_send_sink_shift = false;
++void asma2k_state::ir_tx_byte_w(uint8_t data)
++{
++	if (!m_ir_capture_active)
++		return;
++	if (m_ir_raw)
++		m_ir_raw->write(&data, 1);
++	++m_ir_session_bytes;
++	ir_frame_byte(data);
++}
++
++bool asma2k_state::gate1b_tracked_ram_byte(offs_t address) const
++{
++	static constexpr uint16_t pointer_bases[] = {
++		0x0040, 0x0044, 0x0046, 0x004c, 0x004e, 0x0050, 0x0052, 0x0062,
++		0x0067, 0x0120, 0x0122, 0x0124, 0x0126, 0x0128, 0x0278, 0x027c
++	};
++	uint16_t const a = uint16_t(address);
++	for (uint16_t const base : pointer_bases)
++		if (a == base || a == uint16_t(base + 1))
++			return true;
++
++	// Gate 1B hardening audit: also observe the volatile F-slot snapshot/cache tables.
++	if ((a >= 0x012a && a <= 0x0159) || (a >= 0x0192 && a <= 0x01a1))
++		return true;
++
++	// State directly implicated by the remaining C008/alias proof obligations.
++	return a == 0x0061 || a == 0x01f8 || a == 0x0290 || a == 0x0291 || a == 0x0294;
+ }
+ 
+-void asma2k_state::send_sink_byte(uint8_t data)
++void asma2k_state::gate1b_memory_read(unsigned probe, offs_t address, uint8_t data)
+ {
+-	if (!m_send_sink_active)
++	static constexpr char const *names[] = { "W1", "W2", "W3", "Q_EADC", "W4", "CTRL_D079", "CTRL_E0", "CTRL_D8" };
++	uint64_t *counter = nullptr;
++	switch (probe)
++	{
++	case 0: counter = &m_gate1b_w1_reads; break;
++	case 1: counter = &m_gate1b_w2_reads; break;
++	case 2: counter = &m_gate1b_w3_reads; break;
++	case 3: counter = &m_gate1b_quarantine_reads; break;
++	case 4: counter = &m_gate1b_w4_reads; break;
++	case 5: counter = &m_gate1b_ctrl_d079_reads; break;
++	case 6: counter = &m_gate1b_ctrl_e0_reads; break;
++	case 7: counter = &m_gate1b_ctrl_d8_reads; break;
++	default: return;
++	}
++
++	++*counter;
++	uint64_t const log_limit = (probe <= 4) ? 512 : 8;
++	if (*counter > log_limit && ((*counter & 0x0fff) != 0))
++		return;
++
++	// HC11 state indices are stable in this local MAME core: SP=2, A=4,
++	// B=5, IX=7, IY=8.  PC is captured at instruction entry by the existing
++	// callback so operand fetch advancement cannot misattribute the access.
++	logerror("AS2K_GATE1B_MEM_READ probe=%s n=%llu addr=%04X value=%02X pc=%04X a=%02X b=%02X x=%04X y=%04X sp=%04X\n",
++		names[probe], static_cast<unsigned long long>(*counter), unsigned(address) & 0xffff, unsigned(data),
++		m_gate1b_current_pc, unsigned(m_maincpu->state_int(4)) & 0xff,
++		unsigned(m_maincpu->state_int(5)) & 0xff, unsigned(m_maincpu->state_int(7)) & 0xffff,
++		unsigned(m_maincpu->state_int(8)) & 0xffff, unsigned(m_maincpu->state_int(2)) & 0xffff);
++}
++
++void asma2k_state::gate1b_pointer_write(offs_t address, uint8_t data)
++{
++	if (!gate1b_tracked_ram_byte(address))
++		return;
++
++	++m_gate1b_tracked_writes;
++	if (m_gate1b_tracked_writes <= 2048 || ((m_gate1b_tracked_writes & 0x0fff) == 0))
++		logerror("AS2K_GATE1B_RAM_WRITE n=%llu addr=%04X value=%02X pc=%04X x=%04X y=%04X sp=%04X\n",
++			static_cast<unsigned long long>(m_gate1b_tracked_writes), unsigned(address) & 0xffff, unsigned(data),
++			m_gate1b_current_pc, unsigned(m_maincpu->state_int(7)) & 0xffff,
++			unsigned(m_maincpu->state_int(8)) & 0xffff, unsigned(m_maincpu->state_int(2)) & 0xffff);
++}
++
++void asma2k_state::postir_ram_access(bool is_write, offs_t address)
++{
++	if (address < 0x0040 || address > 0x00ff)
++		return;
++
++	unsigned const index = unsigned(address) - 0x40;
++	if (is_write)
++	{
++		++m_postir_ram_writes[index];
++		++m_postir_ram_total_writes;
++	}
++	else
++	{
++		++m_postir_ram_reads[index];
++		++m_postir_ram_total_reads;
++	}
++
++	uint32_t const key = (is_write ? 0x80000000U : 0U)
++		| ((uint32_t(address) & 0xffU) << 16) | uint32_t(m_gate1b_current_pc);
++	if (!m_postir_ram_seen.insert(key).second)
+ 		return;
+ 
+-	if (data == 0xf0)
++	logerror("AS2K_POSTIR_RAM_ACCESS op=%c addr=%04X pc=%04X x=%04X y=%04X sp=%04X\n",
++		is_write ? 'W' : 'R', unsigned(address) & 0xffff, m_gate1b_current_pc,
++		unsigned(m_maincpu->state_int(7)) & 0xffff, unsigned(m_maincpu->state_int(8)) & 0xffff,
++		unsigned(m_maincpu->state_int(2)) & 0xffff);
++}
++
++void asma2k_state::gate1b_p0c_pc_w(uint16_t pc)
++{
++	m_gate1b_current_pc = pc;
++	++m_gate1b_instructions;
++	if ((m_gate1b_instructions & 0x3ffff) == 0)
++		logerror("AS2K_GATE1B_MEM_SUMMARY instructions=%llu W1=%llu W2=%llu W3=%llu Q=%llu W4=%llu ctrlD079=%llu ctrlE0=%llu ctrlD8=%llu ramwrites=%llu\n",
++			static_cast<unsigned long long>(m_gate1b_instructions),
++			static_cast<unsigned long long>(m_gate1b_w1_reads), static_cast<unsigned long long>(m_gate1b_w2_reads),
++			static_cast<unsigned long long>(m_gate1b_w3_reads), static_cast<unsigned long long>(m_gate1b_quarantine_reads),
++			static_cast<unsigned long long>(m_gate1b_w4_reads), static_cast<unsigned long long>(m_gate1b_ctrl_d079_reads),
++			static_cast<unsigned long long>(m_gate1b_ctrl_e0_reads), static_cast<unsigned long long>(m_gate1b_ctrl_d8_reads),
++			static_cast<unsigned long long>(m_gate1b_tracked_writes));
++
++	static bool observer_logged = false;
++	if (!observer_logged)
++	{
++		observer_logged = true;
++		logerror("AS2K_GATE1B_OBSERVER_ACTIVE pc=%04X col7=%02X col9=%02X\n",
++			pc, m_keyboard[7]->read(), m_keyboard[9]->read());
++	}
++	bool const spell_down = !BIT(m_keyboard[9]->read(), 5);
++	bool const find_down = !BIT(m_keyboard[7]->read(), 6);
++	if (spell_down && !m_gate_spell_down)
+ 	{
+-		m_send_sink_break = true;
++		m_gate_key_probe_id = 10;
++		m_gate_key_trace_left = 192;
++		m_gate_key_trace_seq = 0;
++		logerror("AS2K_GATE_KEYTRACE_START key=10 source=matrix\n");
++	}
++	if (find_down && !m_gate_find_down)
++	{
++		m_gate_key_probe_id = 11;
++		m_gate_key_trace_left = 192;
++		m_gate_key_trace_seq = 0;
++		logerror("AS2K_GATE_KEYTRACE_START key=11 source=matrix\n");
++	}
++	m_gate_spell_down = spell_down;
++	m_gate_find_down = find_down;
++	if (m_gate_key_trace_left)
++	{
++		logerror("AS2K_GATE_KEYTRACE key=%u n=%u pc=%04X\n",
++			m_gate_key_probe_id, m_gate_key_trace_seq++, pc);
++		--m_gate_key_trace_left;
++	}
++	static constexpr uint16_t callers[] = {
++		0xc30f,0xc328,0xc33d,0xc35e,0xc377,0xc389,0xc3a7,0xc3c3,0xc3f5,0xc418,0xc431,
++		0xc451,0xc47c,0xc4c9,0xc4db,0xc50e,0xc52f,0xc541,0xc56f,0xc58f,0xc5ae,0xc5fb,
++		0xc617,0xc636,0xc67a,0xc696,0xc6d7,0xc6f8,0xc70f,0xc73f,0xc759 };
++	bool caller = false;
++	for (uint16_t const site : callers)
++		if (pc == site) { caller = true; break; }
++	static std::bitset<0x1b6e> spell_seen;
++	if (pc >= 0xb52a && pc <= 0xd097)
++	{
++		unsigned const i = pc - 0xb52a;
++		if (!spell_seen.test(i))
++		{
++			spell_seen.set(i);
++			logerror("AS2K_GATE1B_SPELL_PC=%04X\n", pc);
++		}
++	}
++	bool const key_dispatch_probe = pc == 0x9737 || pc == 0x9757 || pc == 0x979e;
++	bool const rs_probe = key_dispatch_probe || pc == 0x97a8 || pc == 0x9c63 || pc == 0x9c6a || pc == 0x9f25;
++	bool const p0_probe = caller || pc == 0xc7dc || pc == 0xc7e8 || pc == 0xce18 || pc == 0xce2a || pc == 0xce31;
++	if (!p0_probe && !rs_probe)
+ 		return;
++	auto &space = m_maincpu->space(AS_PROGRAM);
++	if (rs_probe)
++	{
++		static unsigned rs_probe_events = 0;
++		if (rs_probe_events < 256)
++		{
++			auto const word = [&space](uint16_t addr) { return uint16_t(space.read_byte(addr)) << 8 | space.read_byte(addr + 1); };
++			// HC11_A is state index 4 in mc68hc11.cpp; read-only DIAG observation.
++			logerror("AS2K_GATE1B_RS_PROBE pc=%04X a=%02X ram0061=%02X p0122=%04X p0124=%04X p0126=%04X p0128=%04X\n",
++				pc, unsigned(m_maincpu->state_int(4)) & 0xff, space.read_byte(0x0061), word(0x0122), word(0x0124), word(0x0126), word(0x0128));
++			++rs_probe_events;
++		}
+ 	}
++	if (p0_probe)
++		logerror("AS2K_GATE1B_P0C%s pc=%04X ram0290=%02X ram0291=%02X ram0294=%02X\n",
++			caller ? "_CALL" : "", pc, space.read_byte(0x0290), space.read_byte(0x0291), space.read_byte(0x0294));
++}
++
++void asma2k_state::ir_event_w(uint8_t event)
++{
++	switch (event)
++	{
++	case 0x10:
++		m_ir_peer_send_session = true;
++		m_ir_peer_primary = true;
++		ir_capture_begin("send");
++		break;
++	case 0x11:
++		m_ir_peer_send_session = false;
++		ir_peer_stop();
++		ir_capture_end("send-return");
++		break;
++	case 0x20:
++		m_ir_peer_print_session = true;
++		m_ir_peer_primary = false;
++		ir_capture_begin("print");
++		break;
++	case 0x21:
++		m_ir_peer_print_session = false;
++		ir_print_capture_close(m_ir_print_complete);
++		ir_peer_stop();
++		ir_capture_end("print-return");
++		break;
++	case 0x30:
++		if (m_ir_peer_send_session || m_ir_peer_print_session)
++			ir_peer_begin();
++		break;
++	case 0x01:
++		if (m_ir_capture_active)
++			logerror("AS2K_IR TX_DRAIN bytes=%u frames=%u\n", m_ir_session_bytes, m_ir_frame_count);
++		if (m_ir_peer_pending && !m_ir_peer_active)
++			m_ir_peer_timer->adjust(attotime::from_msec(2));
++		break;
++	default: break;
++	}
++}
++
++
++static uint16_t as2k_ir_fcs16(std::vector<uint8_t> const &data)
++{
++	uint16_t fcs = 0xffff;
++	for (uint8_t value : data)
++	{
++		fcs ^= value;
++		for (unsigned bit = 0; bit < 8; ++bit)
++			fcs = (fcs & 1) ? (fcs >> 1) ^ 0x8408 : fcs >> 1;
++	}
++	return fcs;
++}
++
++void asma2k_state::ir_peer_drive(bool high)
++{
++	m_ir_peer_level = high;
++	m_maincpu->set_input_line(MC68HC11_PAI_LINE, high ? ASSERT_LINE : CLEAR_LINE);
++}
+ 
+-	if (m_send_sink_break)
++void asma2k_state::ir_print_render_pdf(std::string const &pcl_path)
++{
++#if defined(__linux__)
++	char executable[4096];
++	ssize_t const count = ::readlink("/proc/self/exe", executable, sizeof(executable) - 1);
++	if (count <= 0)
++	{
++		logerror("AS2K_IR_PRINT_PDF FAILED reason=cannot_locate_diag_executable raw=%s\n", pcl_path);
++		return;
++	}
++	executable[count] = 0;
++	std::string const binary_path(executable);
++	auto const slash = binary_path.find_last_of('/');
++	std::string const helper = binary_path.substr(0, slash) + "/scripts/as2k_ir_print_to_pdf.py";
++	if (::access(helper.c_str(), R_OK) != 0)
++	{
++		logerror("AS2K_IR_PRINT_PDF FAILED reason=missing_helper path=%s raw=%s\n", helper, pcl_path);
++		return;
++	}
++	std::string pdf_path = pcl_path;
++	auto const dot = pdf_path.find_last_of('.');
++	if (dot != std::string::npos)
++		pdf_path.resize(dot);
++	pdf_path += ".pdf";
++	char *const args[] = { const_cast<char *>("/usr/bin/python3"),
++		const_cast<char *>(helper.c_str()), const_cast<char *>(pcl_path.c_str()),
++		const_cast<char *>(pdf_path.c_str()), nullptr };
++	pid_t pid;
++	int const error = ::posix_spawn(&pid, "/usr/bin/python3", nullptr, nullptr, args, environ);
++	if (error)
+ 	{
+-		if (data == 0x12)
+-			m_send_sink_shift = false;
+-		m_send_sink_break = false;
++		logerror("AS2K_IR_PRINT_PDF FAILED reason=spawn_error code=%d raw=%s\n", error, pcl_path);
+ 		return;
+ 	}
++	int status = 0;
++	if (::waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status))
++	{
++		logerror("AS2K_IR_PRINT_PDF FAILED reason=helper_exit status=%d raw=%s\n", status, pcl_path);
++		popmessage("AlphaSmart: IR print PDF failed; PCL preserved");
++	}
++	else
++	{
++		logerror("AS2K_IR_PRINT_PDF CREATED raw=%s pdf=%s\n", pcl_path, pdf_path);
++		popmessage("AlphaSmart: IR print captured as PDF");
++	}
++#else
++	logerror("AS2K_IR_PRINT_PDF unavailable_on_this_platform raw=%s\n", pcl_path);
++#endif
++}
+ 
+-	if (data == 0x12)
++void asma2k_state::ir_print_capture_close(bool render_pdf)
++{
++	if (!m_ir_print_pcl)
+ 	{
+-		m_send_sink_shift = true;
++		m_ir_print_bytes = 0;
+ 		return;
+ 	}
++	std::string const path = m_ir_print_pcl->fullpath();
++	m_ir_print_pcl->flush();
++	m_ir_print_pcl->close();
++	m_ir_print_pcl.reset();
++	logerror("AS2K_IR_PRINT CAPTURE_CLOSE bytes=%u path=%s render=%u\n",
++		m_ir_print_bytes, path, render_pdf ? 1 : 0);
++	if (render_pdf && m_ir_print_bytes)
++		ir_print_render_pdf(path);
++	m_ir_print_bytes = 0;
++}
+ 
+-	char out = 0;
+-	switch (data)
++void asma2k_state::ir_postload()
++{
++	// DIAG capture files and the SIR transmit vector are intentionally not
++	// serialized.  A mid-session state load therefore aborts the synthetic
++	// peer/capture fail-closed instead of replaying bytes against stale files.
++	m_ir_peer_send_session = false;
++	m_ir_peer_print_session = false;
++	ir_peer_stop();
++	ir_capture_end("state-load");
++	logerror("AS2K_IR POSTLOAD_ABORT active_session=0\n");
++}
++
++void asma2k_state::ir_peer_stop()
++{
++	ir_print_capture_close(false);
++	if (m_ir_text)
+ 	{
+-	case 0x1c: out = m_send_sink_shift ? 'A' : 'a'; break;
+-	case 0x32: out = m_send_sink_shift ? 'B' : 'b'; break;
+-	case 0x21: out = m_send_sink_shift ? 'C' : 'c'; break;
+-	case 0x23: out = m_send_sink_shift ? 'D' : 'd'; break;
+-	case 0x24: out = m_send_sink_shift ? 'E' : 'e'; break;
+-	case 0x2b: out = m_send_sink_shift ? 'F' : 'f'; break;
+-	case 0x34: out = m_send_sink_shift ? 'G' : 'g'; break;
+-	case 0x33: out = m_send_sink_shift ? 'H' : 'h'; break;
+-	case 0x43: out = m_send_sink_shift ? 'I' : 'i'; break;
+-	case 0x3b: out = m_send_sink_shift ? 'J' : 'j'; break;
+-	case 0x42: out = m_send_sink_shift ? 'K' : 'k'; break;
+-	case 0x4b: out = m_send_sink_shift ? 'L' : 'l'; break;
+-	case 0x3a: out = m_send_sink_shift ? 'M' : 'm'; break;
+-	case 0x31: out = m_send_sink_shift ? 'N' : 'n'; break;
+-	case 0x44: out = m_send_sink_shift ? 'O' : 'o'; break;
+-	case 0x4d: out = m_send_sink_shift ? 'P' : 'p'; break;
+-	case 0x15: out = m_send_sink_shift ? 'Q' : 'q'; break;
+-	case 0x2d: out = m_send_sink_shift ? 'R' : 'r'; break;
+-	case 0x1b: out = m_send_sink_shift ? 'S' : 's'; break;
+-	case 0x2c: out = m_send_sink_shift ? 'T' : 't'; break;
+-	case 0x3c: out = m_send_sink_shift ? 'U' : 'u'; break;
+-	case 0x2a: out = m_send_sink_shift ? 'V' : 'v'; break;
+-	case 0x1d: out = m_send_sink_shift ? 'W' : 'w'; break;
+-	case 0x22: out = m_send_sink_shift ? 'X' : 'x'; break;
+-	case 0x35: out = m_send_sink_shift ? 'Y' : 'y'; break;
+-	case 0x1a: out = m_send_sink_shift ? 'Z' : 'z'; break;
++		m_ir_text->flush();
++		logerror("AS2K_IR_PEER TEXT_CLOSE bytes=%u path=%s\n", m_ir_peer_text_bytes, m_ir_text->fullpath());
++		m_ir_text->close();
++		m_ir_text.reset();
++	}
++	if (m_ir_peer_timer)
++		m_ir_peer_timer->adjust(attotime::never);
++	m_ir_peer_raw.clear();
++	m_ir_peer_byte = 0;
++	m_ir_peer_bit = 0;
++	m_ir_peer_pulse_end = false;
++	m_ir_peer_active = false;
++	m_ir_peer_pending = 0;
++	m_ir_peer_print_discovery_replied = false;
++	m_ir_peer_file_receive = false;
++	m_ir_peer_receive_phase = 0;
++	m_ir_print_complete = false;
++	m_ir_peer_text_bytes = 0;
++	m_ir_peer_stage = 0;
++	m_ir_peer_xid_slot = 0;
++	m_ir_peer_nr = 0;
++	m_ir_peer_ns = 0;
++	m_ir_peer_connection_address = 0x02;
++	m_ir_peer_target = 0;
++	m_ir_peer_level = BIT(m_ir_pai->read(), 0);
++	m_maincpu->set_input_line(MC68HC11_PAI_LINE, m_ir_peer_level ? ASSERT_LINE : CLEAR_LINE);
++}
+ 
+-	case 0x16: out = m_send_sink_shift ? '!' : '1'; break;
+-	case 0x1e: out = m_send_sink_shift ? '@' : '2'; break;
+-	case 0x26: out = m_send_sink_shift ? '#' : '3'; break;
+-	case 0x25: out = m_send_sink_shift ? '$' : '4'; break;
+-	case 0x2e: out = m_send_sink_shift ? '%' : '5'; break;
+-	case 0x36: out = m_send_sink_shift ? '^' : '6'; break;
+-	case 0x3d: out = m_send_sink_shift ? '&' : '7'; break;
+-	case 0x3e: out = m_send_sink_shift ? '*' : '8'; break;
+-	case 0x46: out = m_send_sink_shift ? '(' : '9'; break;
+-	case 0x45: out = m_send_sink_shift ? ')' : '0'; break;
++void asma2k_state::ir_peer_begin()
++{
++	ir_peer_stop();
++	m_ir_peer_receive_fixture = m_ir_peer_send_session && BIT(m_ir_rx_fixture->read(), 0);
++	m_ir_peer_stage = 1;
++	m_ir_peer_xid_slot = 0;
++	logerror("AS2K_IR_PEER BEGIN role=%s physical_rx=PA7/PAI bit_ticks=210\n",
++		m_ir_peer_primary ? "primary/send" : "secondary/print");
++	if (m_ir_peer_primary)
++	{
++		m_ir_peer_pending = 1;
++		m_ir_peer_timer->adjust(attotime::from_msec(2));
++	}
++	else
++	{
++		// Print is the opposite IrLAP role: stock firmware performs discovery
++		// and link setup.  Wait passively for its XID command.
++		logerror("AS2K_IR_PEER PRINT_WAIT_XID_COMMAND\n");
++	}
++}
+ 
+-	case 0x54: out = m_send_sink_shift ? '{' : '['; break;
+-	case 0x5b: out = m_send_sink_shift ? '}' : ']'; break;
+-	case 0x4c: out = m_send_sink_shift ? ':' : ';'; break;
+-	case 0x52: out = m_send_sink_shift ? '"' : '\''; break;
+-	case 0x41: out = m_send_sink_shift ? '<' : ','; break;
+-	case 0x49: out = m_send_sink_shift ? '>' : '.'; break;
+-	case 0x4a: out = m_send_sink_shift ? '?' : '/'; break;
+-	case 0x4e: out = m_send_sink_shift ? '_' : '-'; break;
+-	case 0x55: out = m_send_sink_shift ? '+' : '='; break;
+-	case 0x5d: out = m_send_sink_shift ? '|' : '\\'; break;
+-	case 0x0e: out = m_send_sink_shift ? '~' : '`'; break;
++void asma2k_state::ir_peer_send_frame(std::vector<uint8_t> const &body)
++{
++	if (m_ir_peer_active || body.empty())
++		return;
++	std::vector<uint8_t> framed(body);
++	uint16_t const fcs = ~as2k_ir_fcs16(body);
++	framed.push_back(uint8_t(fcs));
++	framed.push_back(uint8_t(fcs >> 8));
++	m_ir_peer_raw.assign(4, 0xff);
++	m_ir_peer_raw.push_back(0xc0);
++	for (uint8_t value : framed)
++	{
++		if (value == 0xc0 || value == 0xc1 || value == 0x7d)
++		{
++			m_ir_peer_raw.push_back(0x7d);
++			m_ir_peer_raw.push_back(value ^ 0x20);
++		}
++		else
++			m_ir_peer_raw.push_back(value);
++	}
++	m_ir_peer_raw.push_back(0xc1);
++	m_ir_peer_byte = 0;
++	m_ir_peer_bit = 0;
++	m_ir_peer_pulse_end = false;
++	m_ir_peer_active = true;
++	ir_peer_drive(true);
++	logerror("AS2K_IR_PEER TX control=%02X body=%u raw=%u stage=%u porta=%02X\n",
++		body.size() > 1 ? body[1] : 0xff, unsigned(body.size()), unsigned(m_ir_peer_raw.size()), m_ir_peer_stage, m_port_a);
++	m_ir_peer_timer->adjust(attotime::zero);
++}
+ 
+-	case 0x29: out = ' '; break;
+-	case 0x5a: out = '\n'; break;
+-	case 0x0d: out = '\t'; break;
+-	default: break;
++void asma2k_state::ir_peer_send_xid()
++{
++	static constexpr uint8_t peer_address[4] = { 0x11, 0x22, 0x33, 0x44 };
++	std::vector<uint8_t> body = { 0xff, 0x3f, 0x01 };
++	body.insert(body.end(), std::begin(peer_address), std::end(peer_address));
++	body.insert(body.end(), { 0xff, 0xff, 0xff, 0xff });
++	uint8_t const slot = m_ir_peer_xid_slot;
++	body.push_back(slot == 0 ? 0x05 : 0x01);
++	body.push_back(slot < 6 ? slot : 0xff);
++	body.push_back(0x00);
++	if (slot >= 6)
++	{
++		static constexpr uint8_t info[] = { 0x82, 0x04, 0x00, 'M', 'A', 'M', 'E', ' ', 'I', 'r', 'D', 'A' };
++		body.insert(body.end(), std::begin(info), std::end(info));
+ 	}
++	ir_peer_send_frame(body);
++}
+ 
+-	if (out)
+-		m_send_sink->write(&out, 1);
++void asma2k_state::ir_peer_send_xid_response()
++{
++	if (!m_ir_peer_target)
++		return;
++	static constexpr uint8_t peer_address[4] = { 0x11, 0x22, 0x33, 0x44 };
++	std::vector<uint8_t> body = { 0xfe, 0xbf, 0x01 };
++	body.insert(body.end(), std::begin(peer_address), std::end(peer_address));
++	body.push_back(uint8_t(m_ir_peer_target >> 24));
++	body.push_back(uint8_t(m_ir_peer_target >> 16));
++	body.push_back(uint8_t(m_ir_peer_target >> 8));
++	body.push_back(uint8_t(m_ir_peer_target));
++	body.push_back(0x01);
++	body.push_back(m_ir_peer_xid_slot);
++	body.push_back(0x00);
++	// IrLAP discovery hints: bit 0x08 is the Printer class.  Stock print
++	// selection checks that exact bit in the discovered-device record at
++	// E526 before attempting IAS.  Keep the extension byte present and
++	// advertise no unrelated secondary service hints.
++	static constexpr uint8_t info[] = {
++		0x88, 0x00, 0x00, 'M', 'A', 'M', 'E', ' ', 'P', 'r', 'i', 'n', 't', 'e', 'r' };
++	body.insert(body.end(), std::begin(info), std::end(info));
++	logerror("AS2K_IR_PEER XID_RESPONSE_TX target=%08X slot=%u\n",
++		m_ir_peer_target, m_ir_peer_xid_slot);
++	ir_peer_send_frame(body);
+ }
+ 
+-void asma2k_state::send_sink_end()
++void asma2k_state::ir_peer_send_snrm()
+ {
+-	if (m_send_sink)
++	if (!m_ir_peer_target)
+ 	{
+-		m_send_sink->flush();
+-		m_send_sink->close();
+-		m_send_sink.reset();
++		logerror("AS2K_IR_PEER SNRM_SKIPPED reason=no_target\n");
++		return;
+ 	}
+-	m_send_sink_active = false;
+-	m_send_sink_break = false;
+-	m_send_sink_shift = false;
++	static constexpr uint8_t peer_address[4] = { 0x11, 0x22, 0x33, 0x44 };
++	std::vector<uint8_t> body = { 0xff, 0x93 };
++	body.insert(body.end(), std::begin(peer_address), std::end(peer_address));
++	body.push_back(uint8_t(m_ir_peer_target >> 24));
++	body.push_back(uint8_t(m_ir_peer_target >> 16));
++	body.push_back(uint8_t(m_ir_peer_target >> 8));
++	body.push_back(uint8_t(m_ir_peer_target));
++	body.push_back(0x02); // negotiated connection address, secondary stores even form
++	static constexpr uint8_t params[] = {
++		0x01,0x01,0x02, 0x82,0x01,0x01, 0x83,0x01,0x01, 0x84,0x01,0x01,
++		0x85,0x01,0x10, 0x86,0x01,0x01, 0x08,0x01,0x01 };
++	body.insert(body.end(), std::begin(params), std::end(params));
++	m_ir_peer_stage = 3;
++	ir_peer_send_frame(body);
++}
++
++void asma2k_state::ir_peer_send_ua()
++{
++	if (!m_ir_peer_target)
++		return;
++	static constexpr uint8_t peer_address[4] = { 0x11, 0x22, 0x33, 0x44 };
++	std::vector<uint8_t> body = { m_ir_peer_connection_address, 0x73 };
++	body.insert(body.end(), std::begin(peer_address), std::end(peer_address));
++	body.push_back(uint8_t(m_ir_peer_target >> 24));
++	body.push_back(uint8_t(m_ir_peer_target >> 16));
++	body.push_back(uint8_t(m_ir_peer_target >> 8));
++	body.push_back(uint8_t(m_ir_peer_target));
++	// Mirror the parameter set emitted by stock v3.1.4 in its UA response.
++	static constexpr uint8_t params[] = {
++		0x01,0x01,0x02, 0x82,0x01,0x01, 0x83,0x01,0x01, 0x84,0x01,0x01,
++		0x85,0x01,0x01, 0x86,0x01,0x0a, 0x08,0x01,0x01 };
++	body.insert(body.end(), std::begin(params), std::end(params));
++	m_ir_peer_stage = 4;
++	m_ir_peer_nr = 0;
++	m_ir_peer_ns = 0;
++	logerror("AS2K_IR_PEER UA_TX target=%08X\n", m_ir_peer_target);
++	ir_peer_send_frame(body);
++}
++
++void asma2k_state::ir_peer_send_rr(uint8_t nr, bool final_bit)
++{
++	uint8_t const control = uint8_t(0x01 | ((nr & 7) << 5) | (final_bit ? 0x10 : 0x00));
++	std::vector<uint8_t> body = { uint8_t(m_ir_peer_primary ? (m_ir_peer_connection_address | 0x01) : m_ir_peer_connection_address), control };
++	ir_peer_send_frame(body);
+ }
+ 
+-void asma2k_state::send_pc_w(uint16_t pc)
++void asma2k_state::ir_peer_send_i(std::vector<uint8_t> const &info)
+ {
+-	switch (pc)
++	uint8_t const control = uint8_t(((m_ir_peer_ns & 7) << 1) | 0x10 | ((m_ir_peer_nr & 7) << 5));
++	std::vector<uint8_t> body = { uint8_t(m_ir_peer_primary ? (m_ir_peer_connection_address | 0x01) : m_ir_peer_connection_address), control };
++	body.insert(body.end(), info.begin(), info.end());
++	logerror("AS2K_IR_PEER I_TX ns=%u nr=%u info=%u first=%02X\n",
++		m_ir_peer_ns, m_ir_peer_nr, unsigned(info.size()), info.empty() ? 0xff : info[0]);
++	m_ir_peer_ns = (m_ir_peer_ns + 1) & 7;
++	ir_peer_send_frame(body);
++}
++
++void asma2k_state::ir_peer_on_tx_frame(std::vector<uint8_t> const &frame)
++{
++	if ((!m_ir_peer_send_session && !m_ir_peer_print_session) || frame.size() < 4)
++		return;
++	uint8_t const control = frame[1];
++	if (m_ir_peer_print_session && !m_ir_peer_primary && control == 0x3f && frame.size() >= 16)
+ 	{
+-	case 0x8606: send_sink_begin(); break;
+-	case 0xaa54: send_sink_byte(m_maincpu->space(AS_PROGRAM).read_byte(0x0046)); break;
+-	case 0x80f5: send_sink_end(); break;
+-	default: break;
++		m_ir_peer_target = (uint32_t(frame[3]) << 24) | (uint32_t(frame[4]) << 16) |
++			(uint32_t(frame[5]) << 8) | frame[6];
++		uint8_t const slot = frame[12];
++		// Reply in one deterministic discovery slot only.
++		if (!m_ir_peer_print_discovery_replied && slot == 1)
++		{
++			m_ir_peer_xid_slot = slot;
++			m_ir_peer_print_discovery_replied = true;
++			m_ir_peer_pending = 10;
++			logerror("AS2K_IR_PEER PRINT_XID_COMMAND source=%08X slot=%u reply=1\n",
++				m_ir_peer_target, slot);
++		}
++		return;
++	}
++	if (m_ir_peer_print_session && !m_ir_peer_primary && control == 0x93 && frame.size() >= 13)
++	{
++		m_ir_peer_target = (uint32_t(frame[2]) << 24) | (uint32_t(frame[3]) << 16) |
++			(uint32_t(frame[4]) << 8) | frame[5];
++		m_ir_peer_connection_address = frame[10] & 0xfe;
++		m_ir_peer_stage = 3;
++		m_ir_peer_pending = 11;
++		logerror("AS2K_IR_PEER PRINT_SNRM source=%08X ca=%02X\n",
++			m_ir_peer_target, m_ir_peer_connection_address);
++		return;
++	}
++	if (control == 0xbf && frame.size() >= 9)
++	{
++		m_ir_peer_target = (uint32_t(frame[3]) << 24) | (uint32_t(frame[4]) << 16) |
++			(uint32_t(frame[5]) << 8) | frame[6];
++		logerror("AS2K_IR_PEER XID_RESPONSE target=%08X\n", m_ir_peer_target);
++	}
++	else if (m_ir_peer_primary && control == 0x73)
++	{
++		m_ir_peer_stage = 4;
++		m_ir_peer_nr = 0;
++		m_ir_peer_pending = 3; // Primary grants the secondary a turn with RR(P).
++		logerror("AS2K_IR_PEER LINK_UP control=73 next=RR_POLL\n");
++	}
++	else if (!(control & 0x01) && m_ir_peer_stage >= 4)
++	{
++		uint8_t const incoming_ns = (control >> 1) & 7;
++		if (incoming_ns != m_ir_peer_nr)
++		{
++			// LAP retransmission/out-of-order I-frame: acknowledge the next
++			// sequence we still expect, but never deliver payload twice.
++			logerror("AS2K_IR_PEER I_REJECT ns=%u expected=%u control=%02X\n",
++				incoming_ns, m_ir_peer_nr, control);
++			m_ir_peer_pending = 3;
++			return;
++		}
++		m_ir_peer_nr = (m_ir_peer_nr + 1) & 7;
++		bool const lm_connect_ias = frame.size() >= 8 && frame[2] == 0x80 && frame[3] == 0x52 && frame[4] == 0x01;
++		bool const ias_query = frame.size() >= 10 && frame[2] == 0x00 && frame[3] == 0x52 && frame[4] == 0x84;
++		bool const lm_connect_service = frame.size() >= 9 && frame[2] == 0x91 && frame[3] == 0x53 && frame[4] == 0x01;
++		bool const lm_connect_irlpt = m_ir_peer_print_session && frame.size() >= 8 &&
++			frame[2] == 0x91 && frame[3] == 0x51 && frame[4] == 0x01;
++		bool const irlpt_data = m_ir_peer_print_session && frame.size() >= 6 &&
++			frame[2] == 0x11 && frame[3] == 0x51;
++		bool const irlpt_disconnect = m_ir_peer_print_session && frame.size() >= 8 &&
++			frame[2] == 0x91 && frame[3] == 0x51 && frame[4] == 0x02;
++		if (irlpt_data)
++		{
++			unsigned const payload_bytes = unsigned(frame.size() - 6); // exclude LAP hdr + LSAPs + FCS
++			if (payload_bytes && !m_ir_print_pcl)
++			{
++				std::string rom_directory;
++				path_iterator rom_paths(machine().options().media_path());
++				if (rom_paths.next(rom_directory) && !rom_directory.empty())
++				{
++					m_ir_print_pcl = std::make_unique<emu_file>(rom_directory, OPEN_FLAG_WRITE | OPEN_FLAG_CREATE | OPEN_FLAG_CREATE_PATHS);
++					auto const instant = std::chrono::duration_cast<std::chrono::microseconds>(
++						std::chrono::system_clock::now().time_since_epoch()).count();
++					std::string const name = util::string_format("irda-print-pcl-%lld.prn", static_cast<long long>(instant));
++					std::error_condition const err = m_ir_print_pcl->open(name);
++					if (err)
++						m_ir_print_pcl.reset();
++					else
++						logerror("AS2K_IR_PRINT CAPTURE_OPEN path=%s\n", m_ir_print_pcl->fullpath());
++				}
++			}
++			if (payload_bytes && m_ir_print_pcl)
++			{
++				m_ir_print_pcl->write(&frame[4], payload_bytes);
++				m_ir_print_pcl->flush();
++				m_ir_print_bytes += payload_bytes;
++			}
++			logerror("AS2K_IR_PRINT DATA bytes=%u total=%u\n", payload_bytes, m_ir_print_bytes);
++		}
++		if (irlpt_disconnect)
++			logerror("AS2K_IR_PRINT LMP_DISCONNECT reason=%02X\n", frame[5]);
++		static constexpr uint8_t app_greeting_bytes[] = {
++			'A','l','p','h','a','S','m','a','r','t',' ','I','R',' ','v','1','.','0' };
++		bool app_greeting = m_ir_peer_send_session && !m_ir_peer_file_receive &&
++			frame.size() == 26 && frame[2] == 0x11 && frame[3] == 0x53 &&
++			frame[4] <= 0x7f && frame[5] == 0x00;
++		if (app_greeting)
++			for (unsigned i = 0; i < std::size(app_greeting_bytes); ++i)
++				app_greeting &= frame[6 + i] == app_greeting_bytes[i];
++		// BC84 selects the stock firmware's "Sending File" state ($048A=1).
++		// Its first application reply is FB.  Ghidra shows the active $048A
++		// callback produces the next file chunk when another TinyTP data unit
++		// arrives, so issue a protocol-valid empty IrCOMM data request rather
++		// than polling forever with RR frames.
++		bool const app_send_ready = !m_ir_peer_receive_fixture && frame.size() >= 9 &&
++			frame[2] == 0x11 && frame[3] == 0x53 && frame[5] == 0x00 && frame[6] == 0xfb;
++		bool const app_receive_ack = m_ir_peer_receive_fixture && frame.size() >= 9 &&
++			frame[2] == 0x11 && frame[3] == 0x53 && frame[5] == 0x00 && frame[6] == 0xfb;
++		bool const app_file_data = m_ir_peer_file_receive && frame.size() >= 8 &&
++			frame[2] == 0x11 && frame[3] == 0x53 && frame[5] == 0x00;
++		// Once $048A has exhausted the file, the stock stack emits a TinyTP
++		// data indication containing only LSAPs + credit (no IrCOMM/app byte).
++		// This is the observed protocol boundary for end-of-file.
++		bool const app_send_eof = m_ir_peer_file_receive && frame.size() == 7 &&
++			frame[2] == 0x11 && frame[3] == 0x53;
++		if (app_send_ready && !m_ir_peer_file_receive)
++		{
++			std::string rom_directory;
++			path_iterator rom_paths(machine().options().media_path());
++			if (rom_paths.next(rom_directory) && !rom_directory.empty())
++			{
++				m_ir_text = std::make_unique<emu_file>(rom_directory, OPEN_FLAG_WRITE | OPEN_FLAG_CREATE | OPEN_FLAG_CREATE_PATHS);
++				auto const instant = std::chrono::duration_cast<std::chrono::microseconds>(
++					std::chrono::system_clock::now().time_since_epoch()).count();
++				std::string const name = util::string_format("irda-send-text-%lld.txt", static_cast<long long>(instant));
++				std::error_condition const err = m_ir_text->open(name);
++				if (err)
++					m_ir_text.reset();
++				else
++					logerror("AS2K_IR_PEER TEXT_OPEN path=%s\n", m_ir_text->fullpath());
++			}
++			m_ir_peer_file_receive = true;
++			m_ir_peer_text_bytes = 0;
++		}
++		unsigned app_bytes = 0;
++		if (app_file_data)
++		{
++			// Frame includes two trailing FCS bytes.  IrLMP (11/53), TinyTP
++			// credit and zero IrCOMM-control length occupy bytes 2..5.
++			app_bytes = unsigned(frame.size() - 8);
++			if (app_bytes && m_ir_text)
++			{
++				m_ir_text->write(&frame[6], app_bytes);
++				m_ir_text->flush();
++				m_ir_peer_text_bytes += app_bytes;
++			}
++			logerror("AS2K_IR_PEER FILE_DATA bytes=%u total=%u\n", app_bytes, m_ir_peer_text_bytes);
++		}
++		if (app_send_eof)
++			m_ir_peer_file_receive = false;
++		uint8_t receive_pending = 0;
++		if (app_receive_ack && m_ir_peer_receive_phase == 1)
++			receive_pending = 15;
++		else if (app_receive_ack && m_ir_peer_receive_phase == 2)
++			receive_pending = 9;
++		if (lm_connect_ias)
++			m_ir_peer_pending = 4;
++		else if (ias_query)
++			m_ir_peer_pending = 5;
++		else if (lm_connect_service)
++			m_ir_peer_pending = 6;
++		else if (lm_connect_irlpt)
++			m_ir_peer_pending = 12;
++		else if (app_greeting)
++			m_ir_peer_pending = m_ir_peer_receive_fixture ? 14 : 7;
++		else if (receive_pending)
++			m_ir_peer_pending = receive_pending;
++		else if (app_send_eof)
++			m_ir_peer_pending = 9;
++		else if (app_send_ready || app_file_data)
++			m_ir_peer_pending = 8;
++		else
++			m_ir_peer_pending = 3;
++		logerror("AS2K_IR_PEER I_FRAME control=%02X nr=%u info=%u ias_connect=%u ias_query=%u service_connect=%u irlpt_connect=%u irlpt_data=%u irlpt_disc=%u greeting=%u send_ready=%u rx_ack=%u rx_phase=%u file_data=%u eof=%u\n",
++			control, m_ir_peer_nr, unsigned(frame.size() >= 4 ? frame.size() - 4 : 0),
++			lm_connect_ias ? 1 : 0, ias_query ? 1 : 0, lm_connect_service ? 1 : 0,
++			lm_connect_irlpt ? 1 : 0, irlpt_data ? 1 : 0, irlpt_disconnect ? 1 : 0,
++			app_greeting ? 1 : 0, app_send_ready ? 1 : 0, app_receive_ack ? 1 : 0,
++			m_ir_peer_receive_phase, app_file_data ? 1 : 0, app_send_eof ? 1 : 0);
++	}
++	else if (m_ir_peer_print_session && !m_ir_peer_primary && control == 0x53 && m_ir_peer_stage >= 4)
++	{
++		// IrLAP DISC(P) after the IrLMP user-request disconnect.  A bare UA(F)
++		// terminates the link; without it stock v3.1.4 retries DISC indefinitely.
++		m_ir_peer_pending = 13;
++		logerror("AS2K_IR_PRINT LAP_DISC control=53 next=UA\n");
++	}
++	else if ((control & 0x03) == 0x01 && m_ir_peer_stage >= 4 && BIT(control, 4))
++	{
++		m_ir_peer_pending = 3;
++		logerror("AS2K_IR_PEER S_FRAME_POLL control=%02X nr=%u\n", control, m_ir_peer_nr);
++	}
++}
++
++TIMER_CALLBACK_MEMBER(asma2k_state::ir_peer_timer)
++{
++	static constexpr uint64_t bit_ticks = 210;
++	static constexpr uint64_t pulse_ticks = 36;
++	if (!m_ir_peer_send_session && !m_ir_peer_print_session)
++	{
++		ir_peer_stop();
++		return;
++	}
++	if (!m_ir_peer_active)
++	{
++		// PA6 gates the AS2000 external I/O window.  Never begin an optical
++		// reply while firmware has that window selected for its own TX cycle.
++		if (m_ir_peer_pending && !BIT(m_port_a, 6))
++		{
++			m_ir_peer_timer->adjust(attotime::from_ticks(210, 2'000'000));
++			return;
++		}
++		uint8_t const pending = m_ir_peer_pending;
++		m_ir_peer_pending = 0;
++		if (pending == 1)
++		{
++			ir_peer_send_xid();
++			return;
++		}
++		if (pending == 2)
++		{
++			ir_peer_send_snrm();
++			return;
++		}
++		if (pending == 3)
++		{
++			ir_peer_send_rr(m_ir_peer_nr, true);
++			return;
++		}
++		if (pending == 4)
++		{
++			// IrLMP LM_CONNECT.confirm for IAS (DLSAP 0x52, SLSAP 0).
++			// Final zero is the TinyTP initial-credit field mirrored from the request.
++			ir_peer_send_i({ 0xd2, 0x00, 0x81, 0x00 });
++			return;
++		}
++		if (pending == 5)
++		{
++			// IAS GetValueByClass success: one object, Integer LSAP selector 0x11.
++			// 84=response/last, 00=success, list count=1, object id=1, type=integer.
++			ir_peer_send_i({ 0x52, 0x00, 0x84, 0x00, 0x00, 0x01, 0x00, 0x01,
++				0x01, 0x00, 0x00, 0x00, 0x11 });
++			return;
++		}
++		if (pending == 6)
++		{
++			// TinyTP/IrCOMM LM_CONNECT.confirm: peer service LSAP 0x11,
++			// AS client LSAP 0x53, and five initial credits as requested.
++			ir_peer_send_i({ 0xd3, 0x11, 0x81, 0x00, 0x05 });
++			return;
++		}
++		if (pending == 7)
++		{
++			// AlphaSmart application command BC 84 selects "Sending File".
++			// 53/11 are IrLMP destination/source, 05 grants TinyTP credits,
++			// 00 is the empty IrCOMM control channel.
++			ir_peer_send_i({ 0x53, 0x11, 0x05, 0x00, 0xbc, 0x84 });
++			return;
++		}
++		if (pending == 8)
++		{
++			// In the stock $048A send-file state, each incoming TinyTP data unit
++			// clocks the next application response.  No application bytes are
++			// required here: credit + zero-length IrCOMM control are sufficient.
++			ir_peer_send_i({ 0x53, 0x11, 0x05, 0x00 });
++			return;
++		}
++		if (pending == 9)
++		{
++			// BC92 is the stock application-session completion command; Ghidra
++			// maps it to E4AD, which sets $0599 and releases the Send UI loop.
++			ir_peer_send_i({ 0x53, 0x11, 0x05, 0x00, 0xbc, 0x92 });
++			return;
++		}
++		if (pending == 10)
++		{
++			ir_peer_send_xid_response();
++			return;
++		}
++		if (pending == 11)
++		{
++			ir_peer_send_ua();
++			return;
++		}
++		if (pending == 12)
++		{
++			// IrLMP LM_CONNECT.confirm for IrLPT: AS client LSAP 0x51,
++			// printer service LSAP 0x11, no TinyTP credit field.
++			ir_peer_send_i({ 0xd1, 0x11, 0x81, 0x00 });
++			return;
++		}
++		if (pending == 13)
++		{
++			// Final response to stock IrLAP DISC(P).  No discovery/link
++			// parameters belong in this UA: the link is being torn down.
++			m_ir_print_complete = true;
++			ir_peer_send_frame({ m_ir_peer_connection_address, 0x73 });
++			return;
++		}
++		if (pending == 14)
++		{
++			// Stock E33E cumulative dispatch maps application command 0x87 to
++			// E468 ($0489=1); E1FB then displays the ROM literal
++			// "Receiving File ".  This is a DIAG stimulus of that proven path.
++			m_ir_peer_receive_phase = 1;
++			ir_peer_send_i({ 0x53, 0x11, 0x05, 0x00, 0xbc, 0x87 });
++			return;
++		}
++		if (pending == 15)
++		{
++			// In receive mode E33E consumes application bytes through $9F74
++			// until the stock 0xBB terminator clears $0489.  Keep the fixture
++			// short and printable so resulting RAM/file changes are auditable.
++			m_ir_peer_receive_phase = 2;
++			ir_peer_send_i({ 0x53, 0x11, 0x05, 0x00,
++				'R','X',' ','I','R',' ','T','E','S','T',0x0d,
++				'S','E','C','O','N','D',' ','L','I','N','E',0xbb });
++			return;
++		}
++		return;
++	}
++
++	if (m_ir_peer_pulse_end)
++	{
++		ir_peer_drive(true);
++		m_ir_peer_pulse_end = false;
++		++m_ir_peer_bit;
++		if (m_ir_peer_bit >= 10)
++		{
++			m_ir_peer_bit = 0;
++			++m_ir_peer_byte;
++		}
++		m_ir_peer_timer->adjust(attotime::from_ticks(bit_ticks - pulse_ticks, 2'000'000));
++		return;
++	}
++
++	if (m_ir_peer_byte >= m_ir_peer_raw.size())
++	{
++		m_ir_peer_active = false;
++		ir_peer_drive(true);
++		if (m_ir_peer_primary && m_ir_peer_stage == 1)
++		{
++			if (m_ir_peer_xid_slot < 6)
++			{
++				++m_ir_peer_xid_slot;
++				m_ir_peer_pending = 1;
++				m_ir_peer_timer->adjust(attotime::from_msec(12));
++			}
++			else
++			{
++				m_ir_peer_stage = 2;
++				m_ir_peer_pending = 2;
++				m_ir_peer_timer->adjust(attotime::from_msec(15));
++			}
++		}
++		return;
++	}
++
++	uint8_t const value = m_ir_peer_raw[m_ir_peer_byte];
++	bool const pulse = (m_ir_peer_bit == 0) ||
++		(m_ir_peer_bit >= 1 && m_ir_peer_bit <= 8 && !BIT(value, m_ir_peer_bit - 1));
++	if (pulse)
++	{
++		ir_peer_drive(false);
++		m_ir_peer_pulse_end = true;
++		m_ir_peer_timer->adjust(attotime::from_ticks(pulse_ticks, 2'000'000));
++	}
++	else
++	{
++		++m_ir_peer_bit;
++		if (m_ir_peer_bit >= 10)
++		{
++			m_ir_peer_bit = 0;
++			++m_ir_peer_byte;
++		}
++		m_ir_peer_timer->adjust(attotime::from_ticks(bit_ticks, 2'000'000));
+ 	}
+ }
+ 
+@@ -386,6 +1527,11 @@ void asma2k_state::asma2k_mem(address_map &map)
+ {
+ 	map.unmap_value_high();
+ 	map(0x0000, 0x7fff).view(m_io_view);
++	// PA6 selects peripheral/DictROM overlays, but ordinary addresses remain
++	// backed by RAM.  The stock ROM even PSH/PULs while PA6 is low (e.g.
++	// $9406-$943B); leaving the rest of this view unmapped corrupts an
++	// asynchronous IrDA interrupt stack and returns to $FFFF.
++	m_io_view[0](0x0000, 0x7fff).bankrw("rambank");
+ 	m_io_view[0](0x2000, 0x2000).rw(FUNC(asma2k_state::kb_r), FUNC(asma2k_state::kb_matrixh_w));
+ 	m_io_view[0](0x4000, 0x4000).w(FUNC(asma2k_state::lcd_ctrl_w));
+ 	m_io_view[0](0x4000, 0x7fff).bankr("dictbank");
+@@ -541,6 +1687,11 @@ static INPUT_PORTS_START( alphasmart )
+ 	PORT_BIT(0x40, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x80, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_RSHIFT) PORT_CHAR(UCHAR_MAMEKEY(RSHIFT)) PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 
++	PORT_START("PC_CONNECTED")
++	PORT_CONFNAME(0x01, 0x00, "PC Connected")
++	PORT_CONFSETTING(0x00, DEF_STR(Off))
++	PORT_CONFSETTING(0x01, DEF_STR(On))
++
+ 	PORT_START("BATTERY")
+ 	PORT_CONFNAME(0x01, 0x01, "Battery status")
+ 	PORT_CONFSETTING (0x00, DEF_STR(Low))
+@@ -548,7 +1699,9 @@ static INPUT_PORTS_START( alphasmart )
+ INPUT_PORTS_END
+ 
+ static INPUT_PORTS_START( asma2k )
+-	PORT_START("COL.0")
++	PORT_INCLUDE(alphasmart)
++
++	PORT_MODIFY("COL.0")
+ 	PORT_BIT(0x01, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_CLOSEBRACE) PORT_CHAR(']') PORT_CHAR('}') PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x02, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_F6)   PORT_CHAR(UCHAR_MAMEKEY(F6)) PORT_NAME("F6 (File 6)") PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x04, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_K)     PORT_CHAR('k') PORT_CHAR('K')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+@@ -557,7 +1710,7 @@ static INPUT_PORTS_START( asma2k )
+ 	PORT_BIT(0x20, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_8)     PORT_CHAR('8') PORT_CHAR('*')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x40, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_COMMA) PORT_CHAR(',') PORT_CHAR('<')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x80, IP_ACTIVE_LOW, IPT_UNUSED)
+-	PORT_START("COL.1")
++	PORT_MODIFY("COL.1")
+ 	PORT_BIT(0x01, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x02, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x04, IP_ACTIVE_LOW, IPT_UNUSED)
+@@ -566,7 +1719,7 @@ static INPUT_PORTS_START( asma2k )
+ 	PORT_BIT(0x20, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x40, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_RCONTROL) PORT_NAME("Right Alt/Option") PORT_CHAR(UCHAR_MAMEKEY(RALT))   PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x80, IP_ACTIVE_LOW, IPT_UNUSED)
+-	PORT_START("COL.2")
++	PORT_MODIFY("COL.2")
+ 	PORT_BIT(0x01, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_F7)   PORT_CHAR(UCHAR_MAMEKEY(F7)) PORT_NAME("F7 (File 7)") PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x02, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x04, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_L)     PORT_CHAR('l') PORT_CHAR('L')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+@@ -575,7 +1728,7 @@ static INPUT_PORTS_START( asma2k )
+ 	PORT_BIT(0x20, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_9)     PORT_CHAR('9') PORT_CHAR('(')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x40, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_STOP)  PORT_CHAR('.') PORT_CHAR('>')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x80, IP_ACTIVE_LOW, IPT_UNUSED)
+-	PORT_START("COL.3")
++	PORT_MODIFY("COL.3")
+ 	PORT_BIT(0x01, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_OPENBRACE) PORT_CHAR('[') PORT_CHAR('{')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x02, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_QUOTE) PORT_CHAR('\'')    PORT_CHAR('\"') PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x04, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_COLON) PORT_CHAR(';') PORT_CHAR(':')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+@@ -584,7 +1737,7 @@ static INPUT_PORTS_START( asma2k )
+ 	PORT_BIT(0x20, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_0)     PORT_CHAR('0') PORT_CHAR(')')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x40, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x80, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_SLASH) PORT_CHAR('/') PORT_CHAR('?')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+-	PORT_START("COL.4")
++	PORT_MODIFY("COL.4")
+ 	PORT_BIT(0x01, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x02, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_LWIN) PORT_CODE(KEYCODE_PGUP)  PORT_NAME("Command") PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x04, IP_ACTIVE_LOW, IPT_UNUSED)
+@@ -593,7 +1746,7 @@ static INPUT_PORTS_START( asma2k )
+ 	PORT_BIT(0x20, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_DEL)  PORT_CHAR(UCHAR_MAMEKEY(NUMLOCK)) PORT_NAME("Clear File") PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x40, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x80, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_RALT) PORT_CHAR(UCHAR_MAMEKEY(ESC))    PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+-	PORT_START("COL.5")
++	PORT_MODIFY("COL.5")
+ 	PORT_BIT(0x01, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x02, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_DOWN) PORT_CHAR(UCHAR_MAMEKEY(DOWN))   PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x04, IP_ACTIVE_LOW, IPT_UNUSED)
+@@ -602,7 +1755,7 @@ static INPUT_PORTS_START( asma2k )
+ 	PORT_BIT(0x20, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x40, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_END)  PORT_CHAR(UCHAR_MAMEKEY(END))    PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x80, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_LEFT) PORT_CHAR(UCHAR_MAMEKEY(LEFT))   PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+-	PORT_START("COL.6")
++	PORT_MODIFY("COL.6")
+ 	PORT_BIT(0x01, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x02, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x04, IP_ACTIVE_LOW, IPT_UNUSED)
+@@ -611,16 +1764,16 @@ static INPUT_PORTS_START( asma2k )
+ 	PORT_BIT(0x20, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x40, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x80, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_RIGHT) PORT_CHAR(UCHAR_MAMEKEY(RIGHT)) PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+-	PORT_START("COL.7")
++	PORT_MODIFY("COL.7")
+ 	PORT_BIT(0x01, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x02, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x04, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x08, IP_ACTIVE_LOW, IPT_UNUSED)
+-	PORT_BIT(0x10, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_F12) PORT_NAME("Send") PORT_CHAR(UCHAR_MAMEKEY(F12)) PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
++	PORT_BIT(0x10, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_F12) PORT_NAME("Send") PORT_CHAR(UCHAR_MAMEKEY(F12)) PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(asma2k_state::accessory_action_changed), 2)
+ 	PORT_BIT(0x20, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x40, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_F11)  PORT_CHAR(UCHAR_MAMEKEY(F11)) PORT_NAME("Find") PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x80, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_UP)   PORT_CHAR(UCHAR_MAMEKEY(UP))     PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+-	PORT_START("COL.8")
++	PORT_MODIFY("COL.8")
+ 	PORT_BIT(0x01, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x02, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x04, IP_ACTIVE_LOW, IPT_UNUSED)
+@@ -629,16 +1782,16 @@ static INPUT_PORTS_START( asma2k )
+ 	PORT_BIT(0x20, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x40, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x80, IP_ACTIVE_LOW, IPT_UNUSED)
+-	PORT_START("COL.9")
++	PORT_MODIFY("COL.9")
+ 	PORT_BIT(0x01, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_BACKSPACE) PORT_NAME("Delete") PORT_CHAR(UCHAR_MAMEKEY(BACKSPACE)) PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x02, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_F5)   PORT_CHAR(UCHAR_MAMEKEY(F5)) PORT_NAME("F5 (File 5)") PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x04, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_BACKSLASH) PORT_CHAR('\\') PORT_CHAR('|') PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x08, IP_ACTIVE_LOW, IPT_UNUSED)
+-	PORT_BIT(0x10, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_F9)   PORT_CHAR(UCHAR_MAMEKEY(F9)) PORT_NAME("Print") PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
++	PORT_BIT(0x10, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_F9)   PORT_CHAR(UCHAR_MAMEKEY(F9)) PORT_NAME("Print") PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(asma2k_state::accessory_action_changed), 1)
+ 	PORT_BIT(0x20, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_F10)  PORT_CHAR(UCHAR_MAMEKEY(F10)) PORT_NAME("Spell Check") PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x40, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_ENTER)   PORT_NAME("Return") PORT_CHAR(13) PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x80, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_SPACE)     PORT_CHAR(' ') PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+-	PORT_START("COL.10")
++	PORT_MODIFY("COL.10")
+ 	PORT_BIT(0x01, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_F3)   PORT_CHAR(UCHAR_MAMEKEY(F3)) PORT_NAME("F3 (File 3)") PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x02, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_F4)   PORT_CHAR(UCHAR_MAMEKEY(F4)) PORT_NAME("F4 (File 4)") PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x04, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_D)    PORT_CHAR('d')  PORT_CHAR('D')   PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+@@ -647,7 +1800,7 @@ static INPUT_PORTS_START( asma2k )
+ 	PORT_BIT(0x20, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_3)    PORT_CHAR('3')  PORT_CHAR('#')   PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x40, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_C)    PORT_CHAR('c')  PORT_CHAR('C')   PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x80, IP_ACTIVE_LOW, IPT_UNUSED)
+-	PORT_START("COL.11")
++	PORT_MODIFY("COL.11")
+ 	PORT_BIT(0x01, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_CAPSLOCK) PORT_CHAR(UCHAR_MAMEKEY(CAPSLOCK)) PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x02, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x04, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_S)    PORT_CHAR('s')  PORT_CHAR('S')   PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+@@ -656,7 +1809,7 @@ static INPUT_PORTS_START( asma2k )
+ 	PORT_BIT(0x20, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_2)    PORT_CHAR('2')  PORT_CHAR('@')   PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x40, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_X)    PORT_CHAR('x')  PORT_CHAR('X')   PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x80, IP_ACTIVE_LOW, IPT_UNUSED)
+-	PORT_START("COL.12")
++	PORT_MODIFY("COL.12")
+ 	PORT_BIT(0x01, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_TAB)  PORT_CHAR('\t')   PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x02, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x04, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_A)    PORT_CHAR('a')  PORT_CHAR('A')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+@@ -665,7 +1818,7 @@ static INPUT_PORTS_START( asma2k )
+ 	PORT_BIT(0x20, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_1)    PORT_CHAR('1')  PORT_CHAR('!')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x40, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_Z)    PORT_CHAR('z')  PORT_CHAR('Z')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x80, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_LCONTROL) PORT_CHAR(UCHAR_MAMEKEY(LCONTROL)) PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+-	PORT_START("COL.13")
++	PORT_MODIFY("COL.13")
+ 	PORT_BIT(0x01, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_T)    PORT_CHAR('t')  PORT_CHAR('T')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x02, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_G)    PORT_CHAR('g')  PORT_CHAR('G')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x04, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_F)    PORT_CHAR('f')  PORT_CHAR('F')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+@@ -674,7 +1827,7 @@ static INPUT_PORTS_START( asma2k )
+ 	PORT_BIT(0x20, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_4)    PORT_CHAR('4')  PORT_CHAR('$')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x40, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_V)    PORT_CHAR('v')  PORT_CHAR('V')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x80, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_B)    PORT_CHAR('b')  PORT_CHAR('B')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+-	PORT_START("COL.14")
++	PORT_MODIFY("COL.14")
+ 	PORT_BIT(0x01, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_LSHIFT) PORT_CHAR(UCHAR_SHIFT_1) PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x02, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x04, IP_ACTIVE_LOW, IPT_UNUSED)
+@@ -683,7 +1836,7 @@ static INPUT_PORTS_START( asma2k )
+ 	PORT_BIT(0x20, IP_ACTIVE_LOW, IPT_UNUSED)
+ 	PORT_BIT(0x40, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_RSHIFT) PORT_CHAR(UCHAR_MAMEKEY(RSHIFT)) PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x80, IP_ACTIVE_LOW, IPT_UNUSED)
+-	PORT_START("COL.15")
++	PORT_MODIFY("COL.15")
+ 	PORT_BIT(0x01, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_Y)    PORT_CHAR('y')  PORT_CHAR('Y')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x02, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_H)    PORT_CHAR('h')  PORT_CHAR('H')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x04, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_J)    PORT_CHAR('j')  PORT_CHAR('J')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+@@ -693,15 +1846,25 @@ static INPUT_PORTS_START( asma2k )
+ 	PORT_BIT(0x40, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_M)    PORT_CHAR('m')  PORT_CHAR('M')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 	PORT_BIT(0x80, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_N)    PORT_CHAR('n')  PORT_CHAR('N')  PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
+ 
+-	// Emulator-only host attachment control.  Pause/Break is not part of the
+-	// AlphaSmart 2000 keyboard matrix, so it cannot be mistaken for an AS2K key.
+-	PORT_START("PC_CONNECTED")
+-	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_OTHER) PORT_NAME("PC Connected (Pause/Break)") PORT_CODE(KEYCODE_PAUSE) PORT_TOGGLE
+-
+-	PORT_START("BATTERY")
+-	PORT_CONFNAME(0x01, 0x01, "Battery status")
+-	PORT_CONFSETTING (0x00, DEF_STR(Low))
+-	PORT_CONFSETTING (0x01, DEF_STR(Normal))
++	PORT_START("IR_PAI")
++	PORT_BIT(0x01, IP_ACTIVE_LOW, IPT_OTHER) PORT_NAME("IR PAI / PA7 diagnostic") PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(asma2k_state::ir_pai_changed), 0)
++
++	PORT_START("IR_RX_FIXTURE")
++	PORT_CONFNAME(0x01, 0x00, "IrDA application receive stimulus (DIAG)")
++	PORT_CONFSETTING(0x00, DEF_STR(Off))
++	PORT_CONFSETTING(0x01, DEF_STR(On))
++
++	// Reuse the original connector control key, now a four-position selector.
++	// First/second/third press: printer/PC/Mac; pressing after Print/Send: OFF.
++	PORT_MODIFY("PC_CONNECTED")
++	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_OTHER) PORT_NAME("Accessory selector (Pause/Break)") PORT_CODE(KEYCODE_PAUSE) PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(asma2k_state::accessory_mode_changed), 0)
++
++	// Keep the existing diagnostic printer-status instrument as a fault switch.
++	// It only affects PA0 when mode 1 has been selected.
++	PORT_START("PRINTER_READY")
++	PORT_CONFNAME(0x01, 0x01, "Wired printer ready signal (DIAG)")
++	PORT_CONFSETTING(0x00, DEF_STR(Off))
++	PORT_CONFSETTING(0x01, DEF_STR(On))
+ INPUT_PORTS_END
+ 
+ void alphasmart_state::alphasmart_palette(palette_device &palette) const
+@@ -726,12 +1889,142 @@ void alphasmart_state::machine_start()
+ 	m_tmp_bitmap = std::make_unique<bitmap_ind16>(6 * 40, 9 * 4);
+ }
+ 
++void asma2k_state::postir_install_ram_probes()
++{
++	auto &space = m_maincpu->space(AS_PROGRAM);
++
++	m_postir_ram_read_tap.remove();
++	m_postir_ram_read_tap = space.install_read_tap(
++		0x0040, 0x00ff, "as2k_postir_internal_ram_read",
++		[this](offs_t address, uint8_t &data, uint8_t mem_mask)
++		{
++			if (!machine().side_effects_disabled())
++				postir_ram_access(false, address);
++		},
++		&m_postir_ram_read_tap);
++
++	m_postir_ram_write_tap.remove();
++	m_postir_ram_write_tap = space.install_write_tap(
++		0x0040, 0x00ff, "as2k_postir_internal_ram_write",
++		[this](offs_t address, uint8_t &data, uint8_t mem_mask)
++		{
++			if (!machine().side_effects_disabled())
++				postir_ram_access(true, address);
++		},
++		&m_postir_ram_write_tap);
++
++	logerror("AS2K_POSTIR_RAM_PROBE_ACTIVE range=0040-00FF mode=unique-rw-address-pc\n");
++}
++
++void asma2k_state::gate1b_install_memory_probes()
++{
++	auto &space = m_maincpu->space(AS_PROGRAM);
++	auto const install_read = [this, &space](
++			memory_passthrough_handler &handler, offs_t start, offs_t end,
++			char const *name, unsigned probe)
++	{
++		handler.remove();
++		handler = space.install_read_tap(
++			start, end, name,
++			[this, probe](offs_t address, uint8_t &data, uint8_t mem_mask)
++			{
++				if (!machine().side_effects_disabled())
++					gate1b_memory_read(probe, address, data);
++			},
++			&handler);
++	};
++
++	install_read(m_gate1b_w1_tap, 0xd099, 0xd487, "as2k_gate1b_w1", 0);
++	install_read(m_gate1b_w2_tap, 0xd499, 0xd517, "as2k_gate1b_w2", 1);
++	install_read(m_gate1b_w3_tap, 0xe104, 0xeadb, "as2k_gate1b_w3", 2);
++	install_read(m_gate1b_quarantine_tap, 0xeadc, 0xeae7, "as2k_gate1b_quarantine", 3);
++	install_read(m_gate1b_w4_tap, 0xeae8, 0xffbf, "as2k_gate1b_w4", 4);
++
++	// Positive controls prove the taps are active on known retained table/string
++	// traffic; a zero W1-W4 count is meaningful only when a control is exercised.
++	install_read(m_gate1b_ctrl_d079_tap, 0xd079, 0xd098, "as2k_gate1b_ctrl_d079", 5);
++	install_read(m_gate1b_ctrl_e0_tap, 0xe0e0, 0xe103, "as2k_gate1b_ctrl_e0", 6);
++	install_read(m_gate1b_ctrl_d8_tap, 0xd8aa, 0xd9a9, "as2k_gate1b_ctrl_d8", 7);
++
++	m_gate1b_ram_write_tap.remove();
++	m_gate1b_ram_write_tap = space.install_write_tap(
++		0x0040, 0x0294, "as2k_gate1b_ram_provenance",
++		[this](offs_t address, uint8_t &data, uint8_t mem_mask)
++		{
++			if (!machine().side_effects_disabled())
++				gate1b_pointer_write(address, data);
++		},
++		&m_gate1b_ram_write_tap);
++
++	logerror("AS2K_GATE1B_MEM_PROBE_ACTIVE W1=D099-D487 W2=D499-D517 W3=E104-EADB Q=EADC-EAE7 W4=EAE8-FFBF controls=D079-D098,E0E0-E103,D8AA-D9A9\n");
++}
++
+ void asma2k_state::machine_start()
+ {
+ 	alphasmart_state::machine_start();
+ 
+ 	m_dictbank->configure_entries(0, 8, memregion("spellcheck")->base(), 0x4000);
+ 	m_dictbank->set_entry(0);
++	m_ir_peer_timer = timer_alloc(FUNC(asma2k_state::ir_peer_timer), this);
++	gate1b_install_memory_probes();
++	postir_install_ram_probes();
++	save_item(NAME(m_connection_mode));
++	save_item(NAME(m_mode_disconnect_next));
++	save_item(NAME(m_printer_capture_armed));
++	save_item(NAME(m_ir_peer_byte));
++	save_item(NAME(m_ir_peer_bit));
++	save_item(NAME(m_ir_peer_pulse_end));
++	save_item(NAME(m_ir_peer_active));
++	save_item(NAME(m_ir_peer_level));
++	save_item(NAME(m_ir_peer_send_session));
++	save_item(NAME(m_ir_peer_print_session));
++	save_item(NAME(m_ir_peer_primary));
++	save_item(NAME(m_ir_peer_print_discovery_replied));
++	save_item(NAME(m_ir_peer_file_receive));
++	save_item(NAME(m_ir_peer_receive_fixture));
++	save_item(NAME(m_ir_peer_receive_phase));
++	save_item(NAME(m_ir_peer_text_bytes));
++	save_item(NAME(m_ir_print_bytes));
++	save_item(NAME(m_ir_print_complete));
++	save_item(NAME(m_ir_peer_stage));
++	save_item(NAME(m_ir_peer_xid_slot));
++	save_item(NAME(m_ir_peer_pending));
++	save_item(NAME(m_ir_peer_nr));
++	save_item(NAME(m_ir_peer_ns));
++	save_item(NAME(m_ir_peer_connection_address));
++	save_item(NAME(m_ir_peer_target));
++	machine().save().register_postload(save_prepost_delegate(FUNC(asma2k_state::ir_postload), this));
++}
++
++void asma2k_state::machine_reset()
++{
++	m_gate1b_current_pc = 0;
++	m_gate1b_instructions = 0;
++	m_gate1b_w1_reads = m_gate1b_w2_reads = m_gate1b_w3_reads = 0;
++	m_gate1b_quarantine_reads = m_gate1b_w4_reads = 0;
++	m_gate1b_ctrl_d079_reads = m_gate1b_ctrl_e0_reads = m_gate1b_ctrl_d8_reads = 0;
++	m_gate1b_tracked_writes = 0;
++	m_postir_ram_reads.fill(0);
++	m_postir_ram_writes.fill(0);
++	m_postir_ram_seen.clear();
++	m_postir_ram_total_reads = 0;
++	m_postir_ram_total_writes = 0;
++	logerror("AS2K_POSTIR_RAM_RESET counters=0\n");
++	logerror("AS2K_GATE1B_MEM_RESET counters=0\n");
++	printer_capture_end();
++	m_connection_mode = 0;
++	m_mode_disconnect_next = false;
++	m_printer_capture_armed = false;
++	m_ir_peer_send_session = false;
++	m_ir_peer_print_session = false;
++	m_ir_peer_primary = true;
++	m_ir_peer_print_discovery_replied = false;
++	ir_peer_stop();
++	ir_capture_end("reset");
++	alphasmart_state::machine_reset();
++	// IrDA receiver is optically idle HIGH on PA7/PAI.  Test pulses are
++	// injected explicitly by the PHY test, never implicitly at reset.
++	m_maincpu->set_input_line(MC68HC11_PAI_LINE, BIT(m_ir_pai->read(), 0) ? ASSERT_LINE : CLEAR_LINE);
+ }
+ 
+ void alphasmart_state::machine_reset()
+@@ -777,8 +2070,12 @@ void asma2k_state::asma2k(machine_config &config)
+ {
+ 	alphasmart(config);
+ 	m_maincpu->in_pa_callback().set(FUNC(asma2k_state::asma2k_port_a_r));
++	m_maincpu->out_pd_callback().set(FUNC(asma2k_state::asma2k_port_d_w));
+ 	m_maincpu->set_addrmap(AS_PROGRAM, &asma2k_state::asma2k_mem);
+-	m_maincpu->instruction_callback().set(FUNC(asma2k_state::send_pc_w));
++	m_maincpu->set_as2k_gate1a_probe(true);
++	m_maincpu->as2k_ir_tx_callback().set(FUNC(asma2k_state::ir_tx_byte_w));
++	m_maincpu->as2k_ir_event_callback().set(FUNC(asma2k_state::ir_event_w));
++	m_maincpu->instruction_callback().set(FUNC(asma2k_state::gate1b_p0c_pc_w));
+ }
+ 
+ // MCU: MC68HC11D0P
