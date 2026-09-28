@@ -1,0 +1,179 @@
+diff --git a/AGENTS.md b/AGENTS.md
+index eb8196f0294..d81662578b1 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -28,3 +28,18 @@ This branch is the working branch for the AlphaSmart 2000 emulator effort on MAM
+ - After completing or blocking on the task, replace `docs/as2k/CODEX_RESULT.md` with a concise factual report containing commands/tests, observed values, files changed, and final `git status --short`.
+ - If the task authorizes committing/pushing and all stated gates pass, commit the safe tracked changes and push `as2k-mame0289-dev`.
+ - Never commit ROMs, user dumps, generated executables, diagnostic logs, or other proprietary/local artifacts.
++
++## Ghidra local disponible para todos los workers AlphaSmart
++
++AdemÃ¡s de las reglas de este repositorio, aplicar la directriz central en /home/spc/Projects/alphasmart/AGENTS.md y la guÃ­a /home/spc/Projects/alphasmart/tools/automation/GHIDRA_LOCAL_WORKERS.md. Para tareas de desensamblado, utilizar Ghidra instalado en la T160 y consultar primero el estado y los proyectos locales existentes, especialmente /home/spc/GhidraProjects/AS2KReference/estado.json cuando se trate de AS2K. No depender de Drive para estos ciclos y no llamar Codex por rutina. No asumir la CPU o el mapa de memoria de AS2K para otros modelos. Esta incorporaciÃ³n no reactiva workers/timers ni autoriza cambios de firmware, emulador o publicaciÃ³n.
++## T160 â intercambio temporal de archivos por Google Drive (2026-09-25)
++
++Ruta canÃ³nica: `/home/spc/GoogleDrive/apit160/temporal-trabajo`.
++
++- Usar esta carpeta como Ã¡rea **temporal** de intercambio cuando copiar un conjunto acotado de archivos de trabajo permita analizarlos con menos llamadas a Commander o con herramientas conectadas a Google Drive.
++- Preferir una subcarpeta por tarea, con sÃ³lo los archivos estrictamente necesarios. Los originales locales siguen siendo la fuente de verdad; la copia de Drive nunca sustituye al repositorio, estado local, bitÃ¡cora ni respaldo.
++- Mantenerla limpia: al cerrar una tarea, retirar Ãºnicamente los archivos/subcarpetas temporales de esa tarea y comprobar que no queden residuos. No borrar material de otras tareas ni archivos permanentes de Drive.
++- No subir ROMs, dumps, firmware propietario/derivado, proyectos Ghidra que incorporen firmware, credenciales OAuth, tokens, cookies, claves, secretos ni otros datos restringidos. Si una tarea exige una excepciÃ³n, requiere autorizaciÃ³n expresa del usuario.
++- Drive no forma parte de la ruta crÃ­tica: si no estÃ¡ disponible, continuar con operaciones agrupadas de Commander sin bloquear el trabajo.
++- El uso de esta carpeta no autoriza por sÃ­ mismo commits, pushes, publicaciÃ³n, cambios de alcance ni borrados de fuentes originales.
++
+diff --git a/src/mame/skeleton/alphasma.cpp b/src/mame/skeleton/alphasma.cpp
+index b8b5db15886..e5df19a314f 100644
+--- a/src/mame/skeleton/alphasma.cpp
++++ b/src/mame/skeleton/alphasma.cpp
+@@ -84,6 +84,7 @@ public:
+ 		, m_io_view(*this, "io")
+ 		, m_dictbank(*this, "dictbank")
+ 		, m_pc_connected(*this, "PC_CONNECTED")
++		, m_dynfs_trace(*this, "DYNFS_TRACE")
+ 	{
+ 	}
+ 
+@@ -95,6 +96,8 @@ protected:
+ private:
+ 	void lcd_ctrl_w(uint8_t data);
+ 	uint8_t asma2k_port_a_r();
++	uint8_t asma2k_port_d_r();
++	void asma2k_port_d_w(uint8_t data);
+ 	virtual void port_a_w(uint8_t data) override;
+ 	void send_pc_w(uint16_t pc);
+ 	void send_sink_begin();
+@@ -106,12 +109,18 @@ private:
+ 	memory_view m_io_view;
+ 	required_memory_bank m_dictbank;
+ 	required_ioport m_pc_connected;
++	required_ioport m_dynfs_trace;
++	memory_passthrough_handler m_dynfs_write_tap;
+ 
+ 	uint8_t m_lcd_ctrl;
+ 	bool m_send_sink_active = false;
+ 	bool m_send_sink_break = false;
+ 	bool m_send_sink_shift = false;
+ 	std::unique_ptr<emu_file> m_send_sink;
++
++	bool m_ir_trace_active = false;
++	uint32_t m_ir_trace_unique = 0;
++	std::array<bool, 0x10000> m_ir_trace_seen{};
+ };
+ 
+ INPUT_CHANGED_MEMBER(alphasmart_state::kb_irq)
+@@ -215,9 +224,26 @@ uint8_t asma2k_state::asma2k_port_a_r()
+ 	uint8_t data = (m_port_a & 0xfd) | (m_battery_status->read() << 1);
+ 	if (BIT(m_pc_connected->read(), 0))
+ 		data |= 0x05; // PC attached: PA2 asserted, PA0 idle high
++	if (m_ir_trace_active)
++		logerror("AS2K_IRTRACE PORTA_R=%02X latch=%02X\n", data, m_port_a);
++	return data;
++}
++
++uint8_t asma2k_state::asma2k_port_d_r()
++{
++	const uint8_t data = m_port_d;
++	if (m_ir_trace_active)
++		logerror("AS2K_IRTRACE PORTD_R=%02X\n", data);
+ 	return data;
+ }
+ 
++void asma2k_state::asma2k_port_d_w(uint8_t data)
++{
++	if (m_ir_trace_active)
++		logerror("AS2K_IRTRACE PORTD_W=%02X old=%02X\n", data, m_port_d);
++	m_port_d = data;
++}
++
+ void asma2k_state::send_sink_begin()
+ {
+ 	if (m_send_sink)
+@@ -363,6 +389,31 @@ void asma2k_state::send_sink_end()
+ 
+ void asma2k_state::send_pc_w(uint16_t pc)
+ {
++	// Diagnostic-only IR coverage window for the stock editor Send path.
++	// $9716 JSR $D2DC returns at $9719; observation never changes CPU/RAM state.
++	if (pc == 0xd2dc && !m_ir_trace_active)
++	{
++		m_ir_trace_seen.fill(false);
++		m_ir_trace_unique = 0;
++		m_ir_trace_active = true;
++		logerror("AS2K_IRTRACE BEGIN entry=D2DC return=9719\n");
++	}
++
++	if (m_ir_trace_active)
++	{
++		if (!m_ir_trace_seen[pc])
++		{
++			m_ir_trace_seen[pc] = true;
++			m_ir_trace_unique++;
++			logerror("AS2K_IRTRACE PC=%04X\n", pc);
++		}
++		if (pc == 0x9719)
++		{
++			logerror("AS2K_IRTRACE END return=9719 unique=%u\n", m_ir_trace_unique);
++			m_ir_trace_active = false;
++		}
++	}
++
+ 	switch (pc)
+ 	{
+ 	case 0x8606: send_sink_begin(); break;
+@@ -374,6 +425,13 @@ void asma2k_state::send_pc_w(uint16_t pc)
+ 
+ void asma2k_state::port_a_w(uint8_t data)
+ {
++	if (BIT(m_dynfs_trace->read(), 0) && ((m_port_a ^ data) & 0x70))
++		logerror("AS2K_DYNFS BANK pc=%04X old_pa=%02X new_pa=%02X view=%u ram=%u dict=%u\n",
++			unsigned(m_maincpu->pc()), m_port_a, data, unsigned(BIT(data, 6)),
++			unsigned((data >> 4) & 0x03),
++			unsigned((data & 0x30) >> 3 | (m_lcd_ctrl & 0x80) >> 7));
++	if (m_ir_trace_active)
++		logerror("AS2K_IRTRACE PORTA_W=%02X old=%02X\n", data, m_port_a);
+ 	m_io_view.select(BIT(data, 6));
+ 
+ 	m_rambank->set_entry(((data>>4) & 0x03));
+@@ -698,6 +756,11 @@ static INPUT_PORTS_START( asma2k )
+ 	PORT_START("PC_CONNECTED")
+ 	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_OTHER) PORT_NAME("PC Connected (Pause/Break)") PORT_CODE(KEYCODE_PAUSE) PORT_TOGGLE
+ 
++	// Diagnostic-only DynFS tracing.  This input is outside the AS2000 matrix
++	// and only controls logging; it never changes emulated CPU/RAM contents.
++	PORT_START("DYNFS_TRACE")
++	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_OTHER) PORT_NAME("DynFS RAM Trace (Scroll Lock)") PORT_CODE(KEYCODE_SCRLOCK) PORT_TOGGLE
++
+ 	PORT_START("BATTERY")
+ 	PORT_CONFNAME(0x01, 0x01, "Battery status")
+ 	PORT_CONFSETTING (0x00, DEF_STR(Low))
+@@ -732,6 +795,21 @@ void asma2k_state::machine_start()
+ 
+ 	m_dictbank->configure_entries(0, 8, memregion("spellcheck")->base(), 0x4000);
+ 	m_dictbank->set_entry(0);
++
++	// Diagnostic-only banked SRAM observer.  It is passive and disabled unless
++	// DYNFS_TRACE is toggled on.  Log the physical bank plus CPU-visible offset.
++	address_space &program = m_maincpu->space(AS_PROGRAM);
++	m_dynfs_write_tap = program.install_write_tap(
++		0x0000, 0x7fff,
++		"as2k_dynfs_ram_w",
++		[this] (offs_t offset, u8 &data, u8 mem_mask)
++		{
++			if (!machine().side_effects_disabled() && BIT(m_dynfs_trace->read(), 0) && BIT(m_port_a, 6))
++				logerror("AS2K_DYNFS RAMW pc=%04X bank=%u addr=%04X data=%02X mask=%02X\n",
++					unsigned(m_maincpu->pc()), unsigned((m_port_a >> 4) & 0x03),
++					unsigned(offset), unsigned(data), unsigned(mem_mask));
++		},
++		&m_dynfs_write_tap);
+ }
+ 
+ void alphasmart_state::machine_reset()
+@@ -777,6 +855,8 @@ void asma2k_state::asma2k(machine_config &config)
+ {
+ 	alphasmart(config);
+ 	m_maincpu->in_pa_callback().set(FUNC(asma2k_state::asma2k_port_a_r));
++	m_maincpu->in_pd_callback().set(FUNC(asma2k_state::asma2k_port_d_r));
++	m_maincpu->out_pd_callback().set(FUNC(asma2k_state::asma2k_port_d_w));
+ 	m_maincpu->set_addrmap(AS_PROGRAM, &asma2k_state::asma2k_mem);
+ 	m_maincpu->instruction_callback().set(FUNC(asma2k_state::send_pc_w));
+ }
