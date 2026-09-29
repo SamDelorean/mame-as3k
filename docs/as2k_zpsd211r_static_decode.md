@@ -60,3 +60,34 @@ When implementing a fidelity mode, prefer instrumentation before remapping:
 5. retain the stable map as the default until tests close.
 
 No proprietary ROM or trailer data should be committed here.
+
+
+## v1.1: exact AS2K fuse-row map from PSDsoft calibration
+
+A real PSDsoft/PSDabel ZPSD311 project with known source equations and compiled .FOB/.OBJ data was used as a calibration vector. It directly confirms the control/address row positions and exposes one device-family difference: ZPSD311 places A11 at pair0 and A16 at pair5, while the AS2K ZPSD211R CSIOPORT decode proves pair5=A11.
+
+Use this AS2K-specific table in any diagnostic decoder:
+
+```text
+pair0  = A16
+pair1  = A12
+pair2  = A13
+pair3  = A14
+pair4  = A15
+pair5  = A11
+pair6  = A17
+pair7  = A18
+pair8  = A19/CSI
+pair9  = R/W
+pair10 = E
+pair11 = AS
+```
+
+Port-config object fields are now directly calibrated:
+- 0x81E1 = CPAF1, complementary encoding;
+- 0x81E3 = CPBF, complementary encoding;
+- 0x81E4 low3 = CPCF, complementary encoding.
+
+For the stock AS2K this means PA0-PA7 are latched A0-A7, PB0-PB7 are CS0-CS7, and PC0-PC2 are A16/A17/A18-class PAD inputs.
+
+The JSON companion in this directory is intended as machine-readable input for future ZPSD diagnostic instrumentation. Do not hard-code the ZPSD311 A11/A16 row order into generic tooling.
