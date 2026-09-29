@@ -1,0 +1,19 @@
+{
+  "schema": "as2k-zpsd211r-pb4ext-object-contract-v1",
+  "date": "2026-09-28",
+  "runtime_status": "DEFERRED_2026_10",
+  "object_delta": {
+    "address": "0x81E3",
+    "stock": "0xFF",
+    "target": "0xEF",
+    "stock_record": ":0581E000FF00FFFF0796",
+    "target_record": ":0581E000FF00FFEF07A6"
+  },
+  "invariants": [
+    "program region unchanged",
+    "fuse grid 0x8040-0x81BF unchanged",
+    "0x81D0-0x81D3 unchanged",
+    "0x81E0-0x81E2 and 0x81E4 unchanged"
+  ],
+  "note": "Do not change MAME behavior until the deferred October 2026 runtime test plan is executed."
+}
