@@ -918,9 +918,23 @@ ROM_START( asma2k )
 	ROM_LOAD( "dictrom__v1.stm_m27c1001-1501.plcc32.bin", 0x00000, 0x20000, CRC(a143949c) SHA1(033094bb850c614008b4ecc2eefbcb01b8a2bcda) )
 ROM_END
 
+ROM_START( asma2kbt )
+	ROM_REGION( 0x10000, "maincpu", 0 )
+	// Stock v3.1.4 Z remains present only as a negative-control image.
+	// As a clone of asma2k, MAME may resolve this file from the parent ROM set.
+	ROM_LOAD( "alphasmart__2000__v3.1.4__h4.zpsd211r.plcc44.bin", 0x0000, 0x81e5, CRC(49487f6d) SHA1(e0b777dc68c671c31ba808e214fb9d2573b9a853) )
+
+	ROM_REGION( 0x20000, "spellcheck", 0 )
+	ROM_LOAD( "as2k_bt8_dictrom.bin", 0x00000, 0x20000, CRC(c5bd89df) SHA1(6e84689da9e0705920bca24137c88a387dedfac1) )
+
+	ROM_REGION( 0x001b, "stage0", 0 )
+	ROM_LOAD( "as2k_stage0.bin", 0x0000, 0x001b, CRC(ff5dedf9) SHA1(ab76eafa386311b2ab70ea644345fb15767e908f) )
+ROM_END
+
 } // anonymous namespace
 
 
 //    YEAR  NAME     PARENT  COMPAT  MACHINE     INPUT       CLASS             INIT        COMPANY                           FULLNAME           FLAGS
 COMP( 1995, asmapro, 0,      0,      alphasmart, alphasmart, alphasmart_state, empty_init, "Intelligent Peripheral Devices", "AlphaSmart Pro" , MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
-COMP( 1997, asma2k,  0,      0,      asma2k,     asma2k,     asma2k_state,     empty_init, "Intelligent Peripheral Devices", "AlphaSmart 2000", MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
+COMP( 1997, asma2k,   0,      0,      asma2k,     asma2k,     asma2k_state, empty_init, "Intelligent Peripheral Devices", "AlphaSmart 2000", MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
+COMP( 2026, asma2kbt, asma2k, 0,      asma2kbt,   asma2k,     asma2k_state, empty_init, "OpenAI / SamDelorean", "AlphaSmart 2000 (Bootstrap Takeover Diagnostic)", MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
