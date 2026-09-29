@@ -416,6 +416,12 @@ void asma2k_state::gate1a_pc_w(uint16_t pc)
 }
 
 
+// AS2K ZPSD fidelity note:
+// The stable map below intentionally models functional endpoints, not the full ZPSD211R decode.
+// Static trailer analysis indicates wider physical mirrors, PB7/CS7 as a read-enable-class signal,
+// PB1/CS1 as a DictROM-select-class signal, PA6 as the RAM-view/standby gate, and Port C inputs
+// as inert for the recovered stock external decode. See docs/as2k_zpsd211r_static_decode.md before
+// adding mirror mappings or a diagnostic ZPSD layer.
 void asma2k_state::asma2k_mem(address_map &map)
 {
 	map.unmap_value_high();
