@@ -1,0 +1,46 @@
+{
+  "schema": "as2k-256-minimal-adapter-v1",
+  "date": "2026-09-28",
+  "mame_runtime": "DEFERRED_2026_10",
+  "sram": {
+    "from": "uPD431000A/D431000 SOP32",
+    "to": "BS62LV2005SC SOP32",
+    "same_pins": 31,
+    "difference": {
+      "pin": 1,
+      "from": "NC",
+      "to": "A17"
+    }
+  },
+  "dictrom": {
+    "from": "M27C1001 PLCC32",
+    "to": "M27C2001 PLCC32",
+    "same_pins": 31,
+    "difference": {
+      "pin": 7,
+      "from": "NC",
+      "to": "A17"
+    }
+  },
+  "shared_ext": {
+    "source": "ZPSD211R PB4 MCU-I/O",
+    "pulldown_ohm": 47000,
+    "targets": [
+      "SRAM pin1/A17",
+      "M27C2001 pin7/A17"
+    ],
+    "nominal_trace_cuts": 0,
+    "nominal_lifted_pins": 0
+  },
+  "flash_second_stage": {
+    "part": "SST39SF020A PLCC32",
+    "drop_in": false,
+    "requires": "full PLCC interposer/remap plus WE#"
+  },
+  "pending": [
+    "continuity SRAM original pin1 pad",
+    "continuity M27C1001 pin7 pad",
+    "SRAM mechanical footprint",
+    "PLCC vertical clearance"
+  ]
+}
