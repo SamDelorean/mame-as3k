@@ -128,3 +128,19 @@ The static configuration payload is closed without changing MAME runtime behavio
 This is a canonical Intel-HEX payload contract, not proof of a programmer-valid PSDsoft .FOB wrapper. The machine-readable contract is `docs/as2k_zpsd_pb4_ext_object_contract.json`.
 
 Dynamic MAME validation remains deferred until October 2026.
+
+
+## PB4/EXT deferred runtime contract — 2026-09-28
+
+Static work has now closed the PB4/EXT object and electrical contract, but runtime testing is intentionally deferred until October 2026.
+
+When testing resumes, use this exact contract:
+
+- reset: PB4 is input/Hi-Z and external pull-down keeps EXT=0;
+- initialization: DATA4=0 before DIR4=1;
+- EXT=0 preserves RAM banks 0-3 and DictROM/AppROM pages 0-7;
+- EXT=1 selects RAM banks 4-7 and DictROM/AppROM pages 8-15;
+- no ZPSD PAD equation changes are required for PB4 conversion;
+- physical decode mirrors remain diagnostic-only and must not change the stable map during the first EXT tests.
+
+No runtime PASS should be recorded before those tests execute.
