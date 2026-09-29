@@ -89,9 +89,11 @@ public:
 	}
 
 	void asma2k(machine_config &config);
+	void asma2kbt(machine_config &config);
 
 protected:
 	virtual void machine_start() override ATTR_COLD;
+	virtual void machine_reset() override ATTR_COLD;
 
 private:
 	void lcd_ctrl_w(uint8_t data);
@@ -115,6 +117,8 @@ private:
 	bool m_send_sink_shift = false;
 	std::unique_ptr<emu_file> m_send_sink;
 	uint64_t m_gate1a_instruction_count = 0;
+	bool m_bootstrap_diag = false;
+	bool m_takeover_seen = false;
 };
 
 INPUT_CHANGED_MEMBER(alphasmart_state::kb_irq)
@@ -379,6 +383,20 @@ void asma2k_state::port_a_w(uint8_t data)
 void asma2k_state::gate1a_pc_w(uint16_t pc)
 {
 	++m_gate1a_instruction_count;
+
+	if (m_bootstrap_diag)
+	{
+		if (pc >= 0x8000)
+			fatalerror("AS2K_BOOT forbidden Z fetch at %04X", pc);
+
+		if (!m_takeover_seen && pc >= 0x4000 && pc <= 0x7fff)
+		{
+			const unsigned bank = ((m_port_a & 0x30) >> 3) | ((m_lcd_ctrl & 0x80) >> 7);
+			m_takeover_seen = true;
+			logerror("AS2K_BOOT FIRST_DICT_FETCH pc=%04X bank=%u PA=%02X CTRL=%02X\n",
+				pc, bank, m_port_a, m_lcd_ctrl);
+		}
+	}
 
 	// Periodic proof that the callback is observing the live HC11 instruction stream.
 	if ((m_gate1a_instruction_count & 0x3ffff) == 0)
@@ -773,6 +791,8 @@ void asma2k_state::machine_start()
 	m_dictbank->configure_entries(0, 8, memregion("spellcheck")->base(), 0x4000);
 	m_dictbank->set_entry(0);
 	save_item(NAME(m_gate1a_instruction_count));
+	save_item(NAME(m_bootstrap_diag));
+	save_item(NAME(m_takeover_seen));
 	machine().add_notifier(MACHINE_NOTIFY_EXIT, machine_notify_delegate(&asma2k_state::gate1a_probe_stop, this));
 	logerror("AS2K_GATE1A PROBE_ACTIVE forbidden=D098-D487,D499-D517,E104-FFBF protected=E102-E103\n");
 }
@@ -789,6 +809,37 @@ void alphasmart_state::machine_reset()
 	m_matrix[0] = m_matrix[1] = 0;
 	m_port_a = 0;
 	m_port_d = 0;
+}
+
+
+void asma2k_state::machine_reset()
+{
+	alphasmart_state::machine_reset();
+	m_takeover_seen = false;
+
+	if (!m_bootstrap_diag)
+		return;
+
+	static constexpr uint8_t expected_stage0[] = {
+		0x0f, 0x8e, 0x00, 0xc3, 0x14, 0x3f, 0x04, 0x14, 0x3c,
+		0x20, 0x15, 0x00, 0x70, 0x86, 0x04, 0xb7, 0x40, 0x00,
+		0x15, 0x3c, 0x80, 0x15, 0x3c, 0x40, 0x7e, 0x40, 0x00
+	};
+
+	memory_region *const stage0 = memregion("stage0");
+	if (!stage0 || stage0->bytes() != sizeof(expected_stage0))
+		fatalerror("AS2K_BOOT requires exact 27-byte stage0 region");
+
+	for (unsigned i = 0; i < sizeof(expected_stage0); i++)
+		if (stage0->base()[i] != expected_stage0[i])
+			fatalerror("AS2K_BOOT stage0 mismatch at byte %u", i);
+
+	auto &cpu = downcast<mc68hc11d0_device &>(*m_maincpu);
+	cpu.set_diag_bootstrap(true);
+	cpu.diag_bootstrap_load(stage0->base(), sizeof(expected_stage0), 0x0040);
+
+	logerror("AS2K_BOOT INJECT stage0 size=%u entry=0040 HPRIO=%02X\n",
+		unsigned(sizeof(expected_stage0)), cpu.hprio());
 }
 
 void alphasmart_state::alphasmart(machine_config &config)
@@ -828,6 +879,13 @@ void asma2k_state::asma2k(machine_config &config)
 	m_maincpu->in_pa_callback().set(FUNC(asma2k_state::asma2k_port_a_r));
 	m_maincpu->set_addrmap(AS_PROGRAM, &asma2k_state::asma2k_mem);
 	m_maincpu->instruction_callback().set(FUNC(asma2k_state::gate1a_pc_w));
+}
+
+
+void asma2k_state::asma2kbt(machine_config &config)
+{
+	asma2k(config);
+	m_bootstrap_diag = true;
 }
 
 // MCU: MC68HC11D0P
