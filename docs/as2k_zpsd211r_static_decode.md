@@ -27,7 +27,7 @@ Keep these functional behaviors unchanged:
 - PB0-PB7 are stock CS0-CS7 outputs, not MCU-I/O.
 - PC0-PC2 are stock PAD inputs, not external CS8-CS10 outputs.
 - Port C does not participate in any recovered stock decode that feeds ES0-ES7, CSIOPORT, or CS0-CS7.
-- pair6 ~= A17 and pair7 ~= A18 are strong structural assignments; pair0/pair8/pair11 remain an unordered {A16,A19/CSI,AS} set.
+- AS2K fuse-row map is now closed: pair0=A16, pair1=A12, pair2=A13, pair3=A14, pair4=A15, pair5=A11, pair6=A17, pair7=A18, pair8=A19/CSI, pair9=R/W, pair10=E, pair11=AS.
 
 ## Physical decode/mirror model
 
@@ -114,3 +114,17 @@ Future banking contract:
 - AppROM page = (EXT<<3)|(PA5<<2)|(PA4<<1)|CTRL7
 
 No MAME runtime behavior is changed now. Dynamic PB4/EXT validation is deferred until October 2026 by project decision. See docs/as2k_pb4_ext_test_plan.md.
+
+
+## PB4/EXT canonical object payload
+
+The static configuration payload is closed without changing MAME runtime behavior:
+
+- object address 0x81E3: FF -> EF;
+- stock record: `:0581E000FF00FFFF0796`;
+- target record: `:0581E000FF00FFEF07A6`;
+- all program bytes, PAD fuse-grid bytes, global config bytes and other port config bytes remain invariant.
+
+This is a canonical Intel-HEX payload contract, not proof of a programmer-valid PSDsoft .FOB wrapper. The machine-readable contract is `docs/as2k_zpsd_pb4_ext_object_contract.json`.
+
+Dynamic MAME validation remains deferred until October 2026.
