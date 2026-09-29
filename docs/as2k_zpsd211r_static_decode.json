@@ -65,5 +65,36 @@
       "psd/psd311.obj"
     ],
     "caveat": "ZPSD311 swaps A11/A16 row placement relative to AS2K ZPSD211R; tooling must be device-aware."
+  },
+  "pb4_ext_static": {
+    "status": "STATIC_DESIGN_CLOSED",
+    "mame_runtime": "DEFERRED_2026_10",
+    "package_pin": 7,
+    "stock_mode": "CS4",
+    "cs4_slots": [
+      26,
+      27
+    ],
+    "cs4_functional_terms": 0,
+    "cpbf_stock": "0x00",
+    "cpbf_target": "0x10",
+    "raw_object_address": "0x81E3",
+    "raw_stock": "0xFF",
+    "raw_target": "0xEF",
+    "runtime": {
+      "pin": "0x3003",
+      "direction": "0x3005",
+      "data": "0x3007",
+      "mask": "0x10"
+    },
+    "reset": {
+      "direction": "0x00",
+      "data": "0x00",
+      "required_ext_default": 0
+    },
+    "banking": {
+      "ram": "(EXT<<2)|(PA5<<1)|PA4",
+      "approm": "(EXT<<3)|(PA5<<2)|(PA4<<1)|CTRL7"
+    }
   }
 }
