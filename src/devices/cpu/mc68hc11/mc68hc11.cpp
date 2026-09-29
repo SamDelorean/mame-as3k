@@ -1072,7 +1072,8 @@ void mc68hc11d0_device::device_reset()
 
 uint8_t mc68hc11d0_device::hprio_r()
 {
-	return m_hprio;
+	// Preserve the pre-patch unmapped-read behavior for normal D0 users.
+	return m_diag_bootstrap ? m_hprio : 0xff;
 }
 
 
