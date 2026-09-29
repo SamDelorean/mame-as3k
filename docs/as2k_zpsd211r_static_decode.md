@@ -91,3 +91,26 @@ Port-config object fields are now directly calibrated:
 For the stock AS2K this means PA0-PA7 are latched A0-A7, PB0-PB7 are CS0-CS7, and PC0-PC2 are A16/A17/A18-class PAD inputs.
 
 The JSON companion in this directory is intended as machine-readable input for future ZPSD diagnostic instrumentation. Do not hard-code the ZPSD311 A11/A16 row order into generic tooling.
+
+
+## PB4/CS4 Shared-EXT static contract
+
+Static reverse engineering closes PB4 as the preferred internal EXT candidate without changing the current emulator.
+
+- stock PB4 mode: CS4
+- CS4 PAD slots: 26 and 27
+- both slots are CONTRADICT across all 12 literal pairs
+- CS4 therefore never asserts
+- stock CPBF=0x00, raw object 0x81E3=0xFF
+- target CPBF=0x10, raw object 0x81E3=0xEF
+- only CPBF4 changes; the PAD fuse grid does not
+- runtime PB4 mask is 0x10
+- PB Direction=0x3005, PB Data=0x3007
+- both registers reset to 0 in MCU-I/O mode
+- EXT must be externally biased low during reset
+
+Future banking contract:
+- RAM bank = (EXT<<2)|(PA5<<1)|PA4
+- AppROM page = (EXT<<3)|(PA5<<2)|(PA4<<1)|CTRL7
+
+No MAME runtime behavior is changed now. Dynamic PB4/EXT validation is deferred until October 2026 by project decision. See docs/as2k_pb4_ext_test_plan.md.
