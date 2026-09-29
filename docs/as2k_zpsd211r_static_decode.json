@@ -1,0 +1,69 @@
+{
+  "schema": "as2k-zpsd211r-static-decode-v1",
+  "date": "2026-09-28",
+  "device": "ZPSD211R",
+  "fuse_grid": {
+    "rows": 24,
+    "slots": 48,
+    "row_bytes": 16,
+    "raw_offset": 64,
+    "object_base": "0x8040",
+    "slot_formula": "byte_index + 16*bit_plane"
+  },
+  "as2k_pair_map": {
+    "0": "A16",
+    "1": "A12",
+    "2": "A13",
+    "3": "A14",
+    "4": "A15",
+    "5": "A11",
+    "6": "A17",
+    "7": "A18",
+    "8": "A19/CSI",
+    "9": "R/W",
+    "10": "E",
+    "11": "AS"
+  },
+  "config_object": {
+    "0x81E1": {
+      "field": "CPAF1",
+      "encoding": "complementary",
+      "as2k_raw": "0x00",
+      "as2k_logical": "0xFF"
+    },
+    "0x81E3": {
+      "field": "CPBF",
+      "encoding": "complementary",
+      "as2k_raw": "0xFF",
+      "as2k_logical": "0x00"
+    },
+    "0x81E4": {
+      "field": "CPCF",
+      "encoding": "complementary-low3",
+      "as2k_raw": "0x07",
+      "as2k_logical": "0b000"
+    }
+  },
+  "stock_ports": {
+    "portA": "A0-A7 latched address",
+    "portB": "CS0-CS7",
+    "portC": "A16/A17/A18-class PAD inputs"
+  },
+  "decode_hypotheses": {
+    "PB1/CS1": "DictROM E(/CE) class, with PA6/view gating",
+    "PB7/CS7": "common read-enable /OE class",
+    "PB4/CS4": "configured CS with no useful recovered PT; preferred EXT conversion candidate after PCB continuity",
+    "PA6": "SRAM CE2/view/standby class"
+  },
+  "calibration": {
+    "repository": "gastonfeng/987",
+    "commit": "8041eaa70c384fdf4b96a41fc710093c1c2f92d7",
+    "files": [
+      "psd311/987.SV1",
+      "psd/psd311.abl",
+      "psd/psd311.fob",
+      "psd/psd311.obj"
+    ],
+    "caveat": "ZPSD311 swaps A11/A16 row placement relative to AS2K ZPSD211R; tooling must be device-aware."
+  }
+}
