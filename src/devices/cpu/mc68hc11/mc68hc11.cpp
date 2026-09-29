@@ -123,6 +123,8 @@ mc68hc11a1_device::mc68hc11a1_device(const machine_config &mconfig, const char *
 
 mc68hc11d0_device::mc68hc11d0_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock)
 	: mc68hc11_cpu_device(mconfig, MC68HC11D0, tag, owner, clock, 192, 64, 0, 0, 0x00, 0x06, 0x3b)
+	, m_diag_bootstrap(false)
+	, m_hprio(0x00)
 {
 }
 
@@ -608,6 +610,7 @@ void mc68hc11d0_device::mc68hc11_reg_map(memory_view::memory_view_entry &block, 
 	block(base + 0x2f, base + 0x2f).nopw(); // SCDR
 	block(base + 0x39, base + 0x39).rw(FUNC(mc68hc11d0_device::option_r), FUNC(mc68hc11d0_device::option_w)); // OPTION
 	block(base + 0x3a, base + 0x3a).nopw(); // COPRST (watchdog)
+	block(base + 0x3c, base + 0x3c).rw(FUNC(mc68hc11d0_device::hprio_r), FUNC(mc68hc11d0_device::hprio_w)); // HPRIO (diagnostic bootstrap subset)
 	block(base + 0x3d, base + 0x3d).rw(FUNC(mc68hc11d0_device::init_r), FUNC(mc68hc11d0_device::init_w)); // INIT
 	block(base + 0x3f, base + 0x3f).rw(FUNC(mc68hc11d0_device::config_r), FUNC(mc68hc11d0_device::config_w)); // CONFIG
 }
@@ -1045,12 +1048,64 @@ void mc68hc11a1_device::device_reset()
 	ddr_w<1>(0xff);
 }
 
+void mc68hc11d0_device::device_start()
+{
+	mc68hc11_cpu_device::device_start();
+
+	save_item(NAME(m_hprio));
+}
+
+
 void mc68hc11d0_device::device_reset()
 {
 	mc68hc11_cpu_device::device_reset();
 
 	m_port_data[0] &= 0x8f;
 	ddr_w<0>(0x70);
+
+	// The existing core has no MODA/MODB input model. Keep normal users at
+	// the legacy neutral value; only the explicit diagnostic mode represents
+	// the documented Special Bootstrap reset state.
+	m_hprio = m_diag_bootstrap ? 0xc0 : 0x00;
+}
+
+
+uint8_t mc68hc11d0_device::hprio_r()
+{
+	return m_hprio;
+}
+
+
+void mc68hc11d0_device::hprio_w(uint8_t data)
+{
+	// This is deliberately a bounded diagnostic subset, not complete D0
+	// HPRIO emulation. Outside diagnostic bootstrap mode it is inert.
+	if (!m_diag_bootstrap || !(m_hprio & 0x40))
+		return;
+
+	const uint8_t old = m_hprio;
+
+	// MDA may change while SMOD=1.
+	m_hprio = (m_hprio & ~0x20) | (data & 0x20);
+
+	// RBOOT and SMOD may be cleared, but never reasserted until RESET.
+	if (!(data & 0x80))
+		m_hprio &= ~0x80;
+	if (!(data & 0x40))
+		m_hprio &= ~0x40;
+
+	logerror("HC11D0_DIAG HPRIO %02X -> %02X\n", old, m_hprio);
+}
+
+
+void mc68hc11d0_device::diag_bootstrap_load(const uint8_t *data, uint16_t size, uint16_t address)
+{
+	if (!m_diag_bootstrap)
+		fatalerror("HC11D0 diagnostic bootstrap load requested while disabled");
+
+	m_hprio = 0xc0; // RBOOT=1, SMOD=1, MDA=0
+	m_config |= 0x04; // NOCOP=1 in special mode
+	diagnostic_bootstrap_entry(data, size, address);
 }
 
 void mc68hc11e1_device::device_reset()
@@ -1201,6 +1256,30 @@ void mc68hc11_cpu_device::set_irq_state(uint8_t irqn, bool state)
 	else
 		m_irq_state &= ~(0x80000000 >> irqn);
 }
+
+void mc68hc11_cpu_device::diagnostic_bootstrap_entry(const uint8_t *data, uint16_t size, uint16_t address)
+{
+	const uint32_t ram_start = 0x0040;
+	const uint32_t ram_end = ram_start + m_internal_ram_size;
+
+	if (address < ram_start || uint32_t(address) + size > ram_end)
+		fatalerror("HC11 diagnostic bootstrap image $%04X + %u exceeds internal RAM", address, size);
+
+	for (uint16_t i = 0; i < size; i++)
+		m_program.write_byte(address + i, data[i]);
+
+	// device_reset() leaves RESET pending and the CPU in reset wait state.
+	// A completed bootstrap-ROM transfer has already consumed that reset path,
+	// so diagnostic execution starts directly at the downloaded RAM entry.
+	m_irq_state = 0;
+	m_irq_asserted = false;
+	m_wait_state = 0;
+	m_stop_state = 0;
+	m_ccr = CC_X | CC_I | CC_S;
+	m_pc = address;
+	m_ppc = address;
+}
+
 
 void mc68hc11_cpu_device::execute_set_input(int inputnum, int state)
 {
