@@ -84,6 +84,11 @@ protected:
 
 	void set_irq_state(uint8_t irqn, bool state);
 
+	// Diagnostic helper used by bounded post-bootstrap tests. This does not
+	// emulate the SCI boot ROM; it installs a completed bootstrap image into
+	// internal RAM and starts execution at that address.
+	void diagnostic_bootstrap_entry(const uint8_t *data, uint16_t size, uint16_t address);
+
 	virtual void mc68hc11_reg_map(memory_view::memory_view_entry &block, offs_t base) = 0;
 
 	template <int P> uint8_t port_r();
@@ -580,13 +585,26 @@ public:
 	// construction/destruction
 	mc68hc11d0_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock);
 
+	// Bounded diagnostic bootstrap support for the AS2000 takeover tests.
+	// Normal D0 users are unchanged unless this mode is explicitly enabled.
+	void set_diag_bootstrap(bool enable) { m_diag_bootstrap = enable; }
+	bool diag_bootstrap_enabled() const { return m_diag_bootstrap; }
+	uint8_t hprio() const { return m_hprio; }
+	void diag_bootstrap_load(const uint8_t *data, uint16_t size, uint16_t address = 0x0040);
+
 protected:
+	virtual void device_start() override ATTR_COLD;
 	virtual void device_reset() override ATTR_COLD;
 
 	virtual void mc68hc11_reg_map(memory_view::memory_view_entry &block, offs_t base) override;
 
 private:
 	uint8_t reg01_r();
+	uint8_t hprio_r();
+	void hprio_w(uint8_t data);
+
+	bool m_diag_bootstrap;
+	uint8_t m_hprio;
 };
 
 class mc68hc11e1_device : public mc68hc11_cpu_device
