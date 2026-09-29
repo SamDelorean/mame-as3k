@@ -144,3 +144,27 @@ When testing resumes, use this exact contract:
 - physical decode mirrors remain diagnostic-only and must not change the stable map during the first EXT tests.
 
 No runtime PASS should be recorded before those tests execute.
+
+
+## AS2K-256 minimal physical memory adapter — 2026-09-28
+
+The first 256/256 hardware proof should use the electrically minimal memory pair:
+
+- SRAM: uPD431000A/D431000 -> BS62LV2005SC
+  - 31/32 pin functions preserved;
+  - original pin1 NC becomes A17.
+- DictROM: M27C1001 PLCC32 -> M27C2001 PLCC32
+  - 31/32 pin functions preserved;
+  - original pin7 NC becomes A17.
+
+One Shared-EXT net from PB4 fans out to these two new A17 inputs and has a 47 kOhm pull-down.
+
+Expected physical proof configuration:
+- no trace cuts;
+- no lifted pins if the two original NC PCB pads are actually isolated;
+- EXT=0 preserves the stock memory map;
+- EXT=1 selects the upper 128 KiB half of each 256 KiB device.
+
+Do not model SST39SF020A PLCC as a drop-in M27C1001 replacement. Its PLCC pin assignment differs and requires a remapping interposer.
+
+This note is a hardware contract only. MAME runtime testing remains deferred until October 2026.
