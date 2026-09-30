@@ -45,3 +45,22 @@ internal RAM $00A0-$00A3 = "BT8!"
 
 Native run is currently pending because the remote Commander execution quota is
 unavailable.
+
+
+## Physical-test sequencing note
+
+The first physical bootstrap proof has been simplified and no longer uses this
+DictROM path.
+
+BT9-A now validates only:
+
+```
+Special Bootstrap
+ -> 126-byte payload in HC11 internal RAM
+ -> HPRIO.MDA=1 for LCD I/O only
+ -> display "BOOT OK"
+ -> RAM hold loop
+```
+
+The `asma2kbt` DictROM diagnostic remains valid preparation for a later
+increment that proves normal-expanded/external-ROM execution.
