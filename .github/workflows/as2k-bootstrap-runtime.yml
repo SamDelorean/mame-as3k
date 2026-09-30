@@ -1,0 +1,55 @@
+name: AS2000 bootstrap takeover runtime
+
+on:
+  push:
+    branches:
+      - as2k-mame0289-dev
+    paths:
+      - '.github/workflows/as2k-bootstrap-runtime.yml'
+      - 'scripts/as2k_prepare_bootstrap_roms.py'
+      - 'scripts/as2k_test_bootstrap_diag_core.py'
+      - 'scripts/as2k_test_bootstrap_diag_driver.py'
+      - 'scripts/as2k_test_bootstrap_diag_romset.py'
+      - 'src/mame/skeleton/alphasma.cpp'
+      - 'src/devices/cpu/mc68hc11/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@main
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev libsdl2-ttf-dev libfontconfig-dev libasound2-dev libxinerama-dev libxi-dev
+
+      - name: Run bootstrap static guards
+        run: |
+          python3 scripts/as2k_test_bootstrap_diag_core.py
+          python3 scripts/as2k_test_bootstrap_diag_driver.py
+          python3 scripts/as2k_test_bootstrap_diag_romset.py
+
+      - name: Prepare public diagnostic ROMs
+        run: python3 scripts/as2k_prepare_bootstrap_roms.py --romroot roms
+
+      - name: Build focused AlphaSmart target
+        run: make -j3 SUBTARGET=as2kboot SOURCES=src/mame/skeleton/alphasma.cpp REGENIE=1 USE_QTDEBUG=0
+
+      - name: Validate target
+        run: ./as2kboot -validate
+
+      - name: Run self-contained bootstrap takeover
+        run: |
+          rm -f error.log
+          ./as2kboot asma2kbt -rompath roms -video none -sound none -nothrottle -seconds_to_run 1 -log
+          test -f error.log
+          cat error.log
+          grep -F "AS2K_BOOT INJECT stage0 size=27 entry=0040" error.log
+          grep -F "AS2K_BOOT FIRST_DICT_FETCH pc=4000 bank=0" error.log
+          grep -F "AS2K_BOOT PASS pc=4010 signature=BT8! zero_z=1" error.log
+          ! grep -F "AS2K_BOOT forbidden Z fetch" error.log
