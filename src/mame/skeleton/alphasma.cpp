@@ -396,6 +396,21 @@ void asma2k_state::gate1a_pc_w(uint16_t pc)
 			logerror("AS2K_BOOT FIRST_DICT_FETCH pc=%04X bank=%u PA=%02X CTRL=%02X\n",
 				pc, bank, m_port_a, m_lcd_ctrl);
 		}
+
+		if (pc == 0x4010)
+		{
+			auto &space = m_maincpu->space(AS_PROGRAM);
+			const uint8_t b0 = space.read_byte(0x00a0);
+			const uint8_t b1 = space.read_byte(0x00a1);
+			const uint8_t b2 = space.read_byte(0x00a2);
+			const uint8_t b3 = space.read_byte(0x00a3);
+
+			if (b0 != 'B' || b1 != 'T' || b2 != '8' || b3 != '!')
+				fatalerror("AS2K_BOOT landing signature mismatch at 00A0: %02X %02X %02X %02X", b0, b1, b2, b3);
+
+			logerror("AS2K_BOOT PASS pc=4010 signature=BT8! zero_z=1\n");
+			machine().schedule_exit();
+		}
 	}
 
 	// Periodic proof that the callback is observing the live HC11 instruction stream.
@@ -919,10 +934,10 @@ ROM_START( asma2k )
 ROM_END
 
 ROM_START( asma2kbt )
-	ROM_REGION( 0x10000, "maincpu", 0 )
-	// Stock v3.1.4 Z remains present only as a negative-control image.
-	// As a clone of asma2k, MAME may resolve this file from the parent ROM set.
-	ROM_LOAD( "alphasmart__2000__v3.1.4__h4.zpsd211r.plcc44.bin", 0x0000, 0x81e5, CRC(49487f6d) SHA1(e0b777dc68c671c31ba808e214fb9d2573b9a853) )
+	// This diagnostic is intentionally self-contained: any accidental execution
+	// from the stock Z window is forbidden by gate1a_pc_w(), so no copyrighted
+	// AlphaSmart firmware is required to prove bootstrap -> DictROM takeover.
+	ROM_REGION( 0x10000, "maincpu", ROMREGION_ERASEFF )
 
 	ROM_REGION( 0x20000, "spellcheck", 0 )
 	ROM_LOAD( "as2k_bt8_dictrom.bin", 0x00000, 0x20000, CRC(c5bd89df) SHA1(6e84689da9e0705920bca24137c88a387dedfac1) )
