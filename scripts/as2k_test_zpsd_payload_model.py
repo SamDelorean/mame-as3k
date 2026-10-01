@@ -11,9 +11,10 @@ required=[
  'AS2K_ZPSD PSEN_PULSE count=1',
  'm_zpsd_cpbf_raw = 0xef',
  'AS2K_P1 %s special=2 addr=0003 data=EF pulses=1 cpbf=%02X',
- 'AS2K_P1B_CPBF %s cpbf=%02X result=%02X pc=%04X',
+ 'AS2K_P1B_FUNCTIONAL %s cpbf=%02X display=%s pc=%04X',
  'ROM_START( asma2kp1 )',
  'ROM_START( asma2kp1f )',
+ 'zpsd_pb_pin_r()',
  'ROM_START( asma2k1bp )',
  'ROM_START( asma2k1bu )',
 ]

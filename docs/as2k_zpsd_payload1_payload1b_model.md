@@ -35,14 +35,22 @@ Expected/observed terminal records:
 
 ## Payload-1b
 
-Machines `asma2k1bp` and `asma2k1bu` use the same `CPBF_raw` representation.
-They run the same 31-byte verifier with initial state `EF` or `FF`.
+The current Payload-1b is the single-pass functional PB4 verifier/display
+image from `AS2K-V3.14.x:zpsd-programmer-software`. It no longer reads the
+raw CPBF diagnostic alias. Instead it exercises the recovered runtime Port-B
+registers at `$3003/$3005/$3007` and then drives the real emulated KS0066 LCD.
 
-Expected/observed records:
+Canonical corrected image:
 
-`AS2K_P1B_CPBF PASS cpbf=EF result=79 pc=0056`
+- length: 185 bytes, `$0040-$00F8`;
+- SHA256: `a8d03fb419f8bcb82e4f7332583de92a34faea1edf59c773e5d2658cb39a28c0`;
+- PASS fixture: CPBF raw `EF`, PB4 follows DATA4 while DIR4=1, LCD displays `OK`;
+- FAIL fixture: CPBF raw `FF`, PB4 does not follow DATA4 HIGH, LCD displays `ER`;
+- both paths restore DATA4=0 and DIR4=0 before display hold.
 
-`AS2K_P1B_CPBF FAIL cpbf=FF result=1F pc=005D`
+Regression testing found and fixed a result-register lifetime bug in the first
+183-byte single-pass image: `LCD_BYTE` clobbered register B. The corrected
+185-byte image preserves B with `PSHB/PULB` around LCD initialization.
 
-The `$3011` CPBF alias is emulator-only and must not be interpreted as a real
-HC11-visible ZPSD register.
+`asma2k1bp` and `asma2k1bu` run the exact same 185-byte payload with only the
+modeled persistent CPBF state differing.

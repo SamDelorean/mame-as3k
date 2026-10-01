@@ -103,6 +103,11 @@ protected:
 private:
 	void lcd_ctrl_w(uint8_t data);
 	uint8_t zpsd_cpbf_diag_r();
+	uint8_t zpsd_pb_pin_r();
+	uint8_t zpsd_pb_dir_r();
+	void zpsd_pb_dir_w(uint8_t data);
+	uint8_t zpsd_pb_data_r();
+	void zpsd_pb_data_w(uint8_t data);
 	uint8_t zpsd_pc_r();
 	void zpsd_pb_w(uint8_t data);
 	void zpsd_pc_w(uint8_t data);
@@ -134,9 +139,12 @@ private:
 	bool m_payload1b_fail_seen = false;
 	bool m_payload1b_cpbf_diag = false;
 	bool m_payload1b_cpbf_seen = false;
+	bool m_payload1b_pass_path_seen = false;
 	// Diagnostic ZPSD211R configuration/programming model.  It intentionally
 	// models only the recovered CPBF/PORT-programming subset needed by P1/P1b.
 	uint8_t m_zpsd_cpbf_raw = 0xff;
+	uint8_t m_zpsd_pb_dir_reg = 0x00;
+	uint8_t m_zpsd_pb_data_reg = 0x00;
 	uint8_t m_zpsd_pb_bus = 0x00;
 	uint8_t m_zpsd_pc_bus = 0x00;
 	uint8_t m_zpsd_pd_bus = 0x00;
@@ -448,18 +456,21 @@ void asma2k_state::gate1a_pc_w(uint16_t pc)
 			}
 		}
 
-		if (m_payload1b_cpbf_diag && !m_payload1b_cpbf_seen && (pc == 0x0056 || pc == 0x005d))
+		if (m_payload1b_cpbf_diag)
 		{
-			auto &space = m_maincpu->space(AS_PROGRAM);
-			const uint8_t result = space.read_byte(0x00bf);
-			const bool expected_pass = (m_zpsd_cpbf_raw == 0xef);
-			const bool actual_pass = (pc == 0x0056 && result == 0x79);
-			const bool actual_fail = (pc == 0x005d && result == 0x1f);
-			if ((expected_pass && !actual_pass) || (!expected_pass && !actual_fail))
-				fatalerror("AS2K_P1B_CPBF result mismatch cpbf=%02X pc=%04X result=%02X", m_zpsd_cpbf_raw, pc, result);
-			m_payload1b_cpbf_seen = true;
-			logerror("AS2K_P1B_CPBF %s cpbf=%02X result=%02X pc=%04X\n", expected_pass ? "PASS" : "FAIL", m_zpsd_cpbf_raw, result, pc);
-			machine().schedule_exit();
+			if (pc == 0x00c5)
+				m_payload1b_pass_path_seen = true;
+			if (!m_payload1b_cpbf_seen && pc == 0x00cf)
+			{
+				const bool expected_pass = (m_zpsd_cpbf_raw == 0xef);
+				const bool actual_pass = m_payload1b_pass_path_seen;
+				if (expected_pass != actual_pass)
+					fatalerror("AS2K_P1B branch mismatch expected=%u actual=%u cpbf=%02X", expected_pass ? 1 : 0, actual_pass ? 1 : 0, m_zpsd_cpbf_raw);
+				if ((m_zpsd_pb_dir_reg & 0x10) || (m_zpsd_pb_data_reg & 0x10))
+					fatalerror("AS2K_P1B PB4 not restored dir=%02X data=%02X", m_zpsd_pb_dir_reg, m_zpsd_pb_data_reg);
+				m_payload1b_cpbf_seen = true;
+				logerror("AS2K_P1B_FUNCTIONAL %s cpbf=%02X display=%s pc=%04X\n", actual_pass ? "PASS" : "FAIL", m_zpsd_cpbf_raw, actual_pass ? "OK" : "ER", pc);
+			}
 		}
 
 		if (m_payload1b_fail_diag && pc == 0x008d && !m_payload1b_fail_seen)
@@ -565,7 +576,7 @@ void asma2k_state::zpsd_pd_w(uint8_t data)
 
 	// Recovered SPECIAL_ACCEPT is A19/CSI LOW->HIGH->LOW.  Interpret only
 	// the falling edge after a HIGH pulse and only in the bounded diagnostic.
-	if (BIT(old, 5) && !BIT(data, 5))
+	if (m_payload1_diag && BIT(old, 5) && !BIT(data, 5))
 	{
 		if (!BIT(data, 7))
 			fatalerror("AS2K_ZPSD SPECIAL with R/W low");
@@ -601,6 +612,40 @@ void asma2k_state::zpsd_program_pulse()
 	logerror("AS2K_ZPSD PSEN_PULSE count=1 accepted=%u cpbf=%02X\n", m_zpsd_program_allow ? 1 : 0, m_zpsd_cpbf_raw);
 }
 
+uint8_t asma2k_state::zpsd_pb_pin_r()
+{
+	// Payload-1b functional fixture: CPBF raw EF means PB4 is MCU-I/O.
+	// When configured as output, pin4 follows the data latch; stock FF leaves
+	// PB4 as CS4 and this bounded fixture holds it LOW so HIGH-readback fails.
+	uint8_t value = 0x00;
+	if (m_zpsd_cpbf_raw == 0xef && BIT(m_zpsd_pb_dir_reg, 4) && BIT(m_zpsd_pb_data_reg, 4))
+		value |= 0x10;
+	logerror("AS2K_P1B PB_PIN read=%02X cpbf=%02X dir=%02X data=%02X\n", value, m_zpsd_cpbf_raw, m_zpsd_pb_dir_reg, m_zpsd_pb_data_reg);
+	return value;
+}
+
+uint8_t asma2k_state::zpsd_pb_dir_r()
+{
+	return m_zpsd_pb_dir_reg;
+}
+
+void asma2k_state::zpsd_pb_dir_w(uint8_t data)
+{
+	m_zpsd_pb_dir_reg = data;
+	logerror("AS2K_P1B PB_DIR=%02X\n", data);
+}
+
+uint8_t asma2k_state::zpsd_pb_data_r()
+{
+	return m_zpsd_pb_data_reg;
+}
+
+void asma2k_state::zpsd_pb_data_w(uint8_t data)
+{
+	m_zpsd_pb_data_reg = data;
+	logerror("AS2K_P1B PB_DATA=%02X\n", data);
+}
+
 uint8_t asma2k_state::zpsd_cpbf_diag_r()
 {
 	// Emulator-only readback mirror for Payload-1b.  It exposes the same CPBF
@@ -613,6 +658,9 @@ void asma2k_state::asma2k_mem(address_map &map)
 {
 	map.unmap_value_high();
 	map(0x0000, 0x7fff).view(m_io_view);
+	m_io_view[0](0x3003, 0x3003).r(FUNC(asma2k_state::zpsd_pb_pin_r));
+	m_io_view[0](0x3005, 0x3005).rw(FUNC(asma2k_state::zpsd_pb_dir_r), FUNC(asma2k_state::zpsd_pb_dir_w));
+	m_io_view[0](0x3007, 0x3007).rw(FUNC(asma2k_state::zpsd_pb_data_r), FUNC(asma2k_state::zpsd_pb_data_w));
 	m_io_view[0](0x3011, 0x3011).r(FUNC(asma2k_state::zpsd_cpbf_diag_r));
 	m_io_view[0](0x2000, 0x2000).rw(FUNC(asma2k_state::kb_r), FUNC(asma2k_state::kb_matrixh_w));
 	m_io_view[0](0x4000, 0x4000).w(FUNC(asma2k_state::lcd_ctrl_w));
@@ -967,7 +1015,10 @@ void asma2k_state::machine_start()
 	save_item(NAME(m_payload1b_fail_seen));
 	save_item(NAME(m_payload1b_cpbf_diag));
 	save_item(NAME(m_payload1b_cpbf_seen));
+	save_item(NAME(m_payload1b_pass_path_seen));
 	save_item(NAME(m_zpsd_cpbf_raw));
+	save_item(NAME(m_zpsd_pb_dir_reg));
+	save_item(NAME(m_zpsd_pb_data_reg));
 	save_item(NAME(m_zpsd_pb_bus));
 	save_item(NAME(m_zpsd_pc_bus));
 	save_item(NAME(m_zpsd_pd_bus));
@@ -1004,6 +1055,9 @@ void asma2k_state::machine_reset()
 	m_takeover_seen = false;
 	m_payload1b_fail_seen = false;
 	m_payload1b_cpbf_seen = false;
+	m_payload1b_pass_path_seen = false;
+	m_zpsd_pb_dir_reg = 0;
+	m_zpsd_pb_data_reg = 0;
 	m_payload1_pass_path_seen = false;
 	m_payload1_result_seen = false;
 	m_zpsd_special_step = 0;
@@ -1031,12 +1085,12 @@ void asma2k_state::machine_reset()
 	if (m_payload1b_cpbf_diag)
 	{
 		memory_region *const stage0 = memregion("stage0");
-		if (!stage0 || stage0->bytes() != 31)
-			fatalerror("AS2K_P1B_CPBF requires exact 31-byte static verifier");
+		if (!stage0 || stage0->bytes() != 185)
+			fatalerror("AS2K_P1B requires exact 185-byte single-pass verifier/display image");
 		auto &cpu = downcast<mc68hc11d0_device &>(*m_maincpu);
 		cpu.set_diag_bootstrap(true);
-		cpu.diag_bootstrap_load(stage0->base(), 31, 0x0040);
-		logerror("AS2K_P1B_CPBF INJECT payload size=31 entry=0040 cpbf=%02X\n", m_zpsd_cpbf_raw);
+		cpu.diag_bootstrap_load(stage0->base(), 185, 0x0040);
+		logerror("AS2K_P1B INJECT payload size=185 entry=0040 cpbf=%02X\n", m_zpsd_cpbf_raw);
 		return;
 	}
 
@@ -1239,15 +1293,15 @@ ROM_END
 ROM_START( asma2k1bp )
 	ROM_REGION( 0x10000, "maincpu", ROMREGION_ERASEFF )
 	ROM_REGION( 0x20000, "spellcheck", ROMREGION_ERASEFF )
-	ROM_REGION( 0x001f, "stage0", 0 )
-	ROM_LOAD( "as2k_p1b_cpbf_static.bin", 0x0000, 0x001f, CRC(f85cc82e) SHA1(c11e9cb8f61ef2ba8681c32dd478ba132bc8755a) )
+	ROM_REGION( 0x00b9, "stage0", 0 )
+	ROM_LOAD( "as2k_payload1b_singlepass.bin", 0x0000, 0x00b9, CRC(bdb4550c) SHA1(4e05bc24323183e5d6226c227b0673725892f91f) )
 ROM_END
 
 ROM_START( asma2k1bu )
 	ROM_REGION( 0x10000, "maincpu", ROMREGION_ERASEFF )
 	ROM_REGION( 0x20000, "spellcheck", ROMREGION_ERASEFF )
-	ROM_REGION( 0x001f, "stage0", 0 )
-	ROM_LOAD( "as2k_p1b_cpbf_static.bin", 0x0000, 0x001f, CRC(f85cc82e) SHA1(c11e9cb8f61ef2ba8681c32dd478ba132bc8755a) )
+	ROM_REGION( 0x00b9, "stage0", 0 )
+	ROM_LOAD( "as2k_payload1b_singlepass.bin", 0x0000, 0x00b9, CRC(bdb4550c) SHA1(4e05bc24323183e5d6226c227b0673725892f91f) )
 ROM_END
 
 ROM_START( asma2k1bf )
