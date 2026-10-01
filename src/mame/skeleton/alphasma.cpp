@@ -93,6 +93,8 @@ public:
 	void asma2k1bf(machine_config &config);
 	void asma2k1bp(machine_config &config);
 	void asma2k1bu(machine_config &config);
+	void asma2kp1(machine_config &config);
+	void asma2kp1f(machine_config &config);
 
 protected:
 	virtual void machine_start() override ATTR_COLD;
@@ -101,6 +103,11 @@ protected:
 private:
 	void lcd_ctrl_w(uint8_t data);
 	uint8_t zpsd_cpbf_diag_r();
+	uint8_t zpsd_pc_r();
+	void zpsd_pb_w(uint8_t data);
+	void zpsd_pc_w(uint8_t data);
+	void zpsd_pd_w(uint8_t data);
+	void zpsd_program_pulse();
 	uint8_t asma2k_port_a_r();
 	virtual void port_a_w(uint8_t data) override;
 	void gate1a_pc_w(uint16_t pc);
@@ -127,7 +134,20 @@ private:
 	bool m_payload1b_fail_seen = false;
 	bool m_payload1b_cpbf_diag = false;
 	bool m_payload1b_cpbf_seen = false;
-	uint8_t m_zpsd_cpbf_diag = 0xff;
+	// Diagnostic ZPSD211R configuration/programming model.  It intentionally
+	// models only the recovered CPBF/PORT-programming subset needed by P1/P1b.
+	uint8_t m_zpsd_cpbf_raw = 0xff;
+	uint8_t m_zpsd_pb_bus = 0x00;
+	uint8_t m_zpsd_pc_bus = 0x00;
+	uint8_t m_zpsd_pd_bus = 0x00;
+	uint16_t m_zpsd_latched_addr = 0xffff;
+	uint8_t m_zpsd_special_step = 0;
+	uint8_t m_zpsd_program_pulses = 0;
+	bool m_zpsd_diag = false;
+	bool m_zpsd_program_allow = false;
+	bool m_payload1_diag = false;
+	bool m_payload1_pass_path_seen = false;
+	bool m_payload1_result_seen = false;
 };
 
 INPUT_CHANGED_MEMBER(alphasmart_state::kb_irq)
@@ -406,17 +426,39 @@ void asma2k_state::gate1a_pc_w(uint16_t pc)
 				pc, bank, m_port_a, m_lcd_ctrl);
 		}
 
+		if (m_payload1_diag)
+		{
+			// After B8 telemetry returns, the real ATtiny produces the sole 50 ms
+			// PSEN pulse.  The fixture supplies that external event exactly once.
+			if (pc == 0x008a && m_zpsd_program_pulses == 0)
+				zpsd_program_pulse();
+
+			if (pc == 0x00a8)
+				m_payload1_pass_path_seen = true;
+
+			if (pc == 0x00ae && !m_payload1_result_seen)
+			{
+				m_payload1_result_seen = true;
+				const bool expected_pass = m_zpsd_program_allow;
+				const bool actual_pass = m_payload1_pass_path_seen;
+				if (m_zpsd_program_pulses != 1 || m_zpsd_special_step != 2 || expected_pass != actual_pass || (expected_pass && m_zpsd_cpbf_raw != 0xef) || (!expected_pass && m_zpsd_cpbf_raw != 0xff))
+					fatalerror("AS2K_P1 result mismatch expected=%u actual=%u pulses=%u special=%u cpbf=%02X", expected_pass ? 1 : 0, actual_pass ? 1 : 0, m_zpsd_program_pulses, m_zpsd_special_step, m_zpsd_cpbf_raw);
+				logerror("AS2K_P1 %s special=2 addr=0003 data=EF pulses=1 cpbf=%02X\n", actual_pass ? "PASS" : "FAIL", m_zpsd_cpbf_raw);
+				machine().schedule_exit();
+			}
+		}
+
 		if (m_payload1b_cpbf_diag && !m_payload1b_cpbf_seen && (pc == 0x0056 || pc == 0x005d))
 		{
 			auto &space = m_maincpu->space(AS_PROGRAM);
 			const uint8_t result = space.read_byte(0x00bf);
-			const bool expected_pass = (m_zpsd_cpbf_diag == 0xef);
+			const bool expected_pass = (m_zpsd_cpbf_raw == 0xef);
 			const bool actual_pass = (pc == 0x0056 && result == 0x79);
 			const bool actual_fail = (pc == 0x005d && result == 0x1f);
 			if ((expected_pass && !actual_pass) || (!expected_pass && !actual_fail))
-				fatalerror("AS2K_P1B_CPBF result mismatch cpbf=%02X pc=%04X result=%02X", m_zpsd_cpbf_diag, pc, result);
+				fatalerror("AS2K_P1B_CPBF result mismatch cpbf=%02X pc=%04X result=%02X", m_zpsd_cpbf_raw, pc, result);
 			m_payload1b_cpbf_seen = true;
-			logerror("AS2K_P1B_CPBF %s cpbf=%02X result=%02X pc=%04X\n", expected_pass ? "PASS" : "FAIL", m_zpsd_cpbf_diag, result, pc);
+			logerror("AS2K_P1B_CPBF %s cpbf=%02X result=%02X pc=%04X\n", expected_pass ? "PASS" : "FAIL", m_zpsd_cpbf_raw, result, pc);
 			machine().schedule_exit();
 		}
 
@@ -484,10 +526,87 @@ void asma2k_state::gate1a_pc_w(uint16_t pc)
 // PB1/CS1 as a DictROM-select-class signal, PA6 as the RAM-view/standby gate, and Port C inputs
 // as inert for the recovered stock external decode. See docs/as2k_zpsd211r_static_decode.md before
 // adding mirror mappings or a diagnostic ZPSD layer.
+uint8_t asma2k_state::zpsd_pc_r()
+{
+	// During Payload-1 verify, the programming interface drives the selected
+	// PORT configuration byte onto AD0..AD7.  This is not normal runtime GPIO.
+	if (m_zpsd_diag && m_zpsd_special_step == 2 && m_zpsd_latched_addr == 0x0003 && BIT(m_zpsd_pd_bus, 7))
+		return m_zpsd_cpbf_raw;
+	return 0xff;
+}
+
+void asma2k_state::zpsd_pb_w(uint8_t data)
+{
+	if (m_zpsd_diag)
+		m_zpsd_pb_bus = data;
+}
+
+void asma2k_state::zpsd_pc_w(uint8_t data)
+{
+	if (m_zpsd_diag)
+		m_zpsd_pc_bus = data;
+}
+
+void asma2k_state::zpsd_pd_w(uint8_t data)
+{
+	const uint8_t old = m_zpsd_pd_bus;
+	alphasmart_state::port_d_w(data);
+	if (!m_zpsd_diag)
+		return;
+
+	m_zpsd_pd_bus = data;
+
+	// CALE=0: falling AS edge captures the multiplexed address.
+	if (BIT(old, 6) && !BIT(data, 6))
+	{
+		m_zpsd_latched_addr = (uint16_t(m_zpsd_pb_bus) << 8) | m_zpsd_pc_bus;
+		logerror("AS2K_ZPSD LATCH addr=%04X data=%02X rw=%u\n", m_zpsd_latched_addr, m_zpsd_pc_bus, BIT(data, 7));
+	}
+
+	// Recovered SPECIAL_ACCEPT is A19/CSI LOW->HIGH->LOW.  Interpret only
+	// the falling edge after a HIGH pulse and only in the bounded diagnostic.
+	if (BIT(old, 5) && !BIT(data, 5))
+	{
+		if (!BIT(data, 7))
+			fatalerror("AS2K_ZPSD SPECIAL with R/W low");
+
+		if (m_zpsd_special_step == 0 && m_zpsd_latched_addr == 0x0004 && m_zpsd_pc_bus == 0x80)
+		{
+			m_zpsd_special_step = 1;
+			logerror("AS2K_ZPSD SPECIAL_04_80 PASS\n");
+		}
+		else if (m_zpsd_special_step == 1 && m_zpsd_latched_addr == 0x0000 && m_zpsd_pc_bus == 0x08)
+		{
+			m_zpsd_special_step = 2;
+			logerror("AS2K_ZPSD SPECIAL_00_08 PASS PORT_SELECTED\n");
+		}
+		else
+			fatalerror("AS2K_ZPSD unexpected SPECIAL step=%u addr=%04X data=%02X", m_zpsd_special_step, m_zpsd_latched_addr, m_zpsd_pc_bus);
+	}
+}
+
+void asma2k_state::zpsd_program_pulse()
+{
+	if (!m_payload1_diag)
+		return;
+	if (++m_zpsd_program_pulses != 1)
+		fatalerror("AS2K_ZPSD Payload-1 issued more than one synthetic PSEN pulse");
+	if (m_zpsd_special_step != 2 || m_zpsd_latched_addr != 0x0003 || m_zpsd_pc_bus != 0xef || !BIT(m_zpsd_pd_bus, 7))
+		fatalerror("AS2K_ZPSD invalid program posture step=%u addr=%04X data=%02X pd=%02X", m_zpsd_special_step, m_zpsd_latched_addr, m_zpsd_pc_bus, m_zpsd_pd_bus);
+
+	// The external ATtiny/relay supplies the one 50 ms PSEN pulse.  MAME does
+	// not model analog VPP timing; this fixture models its single accepted edge.
+	if (m_zpsd_program_allow)
+		m_zpsd_cpbf_raw = 0xef;
+	logerror("AS2K_ZPSD PSEN_PULSE count=1 accepted=%u cpbf=%02X\n", m_zpsd_program_allow ? 1 : 0, m_zpsd_cpbf_raw);
+}
+
 uint8_t asma2k_state::zpsd_cpbf_diag_r()
 {
-	// Diagnostic-only CPBF mirror. This is NOT a physical ZPSD CPU register.
-	return m_zpsd_cpbf_diag;
+	// Emulator-only readback mirror for Payload-1b.  It exposes the same CPBF
+	// state mutated by the Payload-1 programming model; it is not a physical
+	// HC11-visible ZPSD register.
+	return m_zpsd_cpbf_raw;
 }
 
 void asma2k_state::asma2k_mem(address_map &map)
@@ -848,7 +967,18 @@ void asma2k_state::machine_start()
 	save_item(NAME(m_payload1b_fail_seen));
 	save_item(NAME(m_payload1b_cpbf_diag));
 	save_item(NAME(m_payload1b_cpbf_seen));
-	save_item(NAME(m_zpsd_cpbf_diag));
+	save_item(NAME(m_zpsd_cpbf_raw));
+	save_item(NAME(m_zpsd_pb_bus));
+	save_item(NAME(m_zpsd_pc_bus));
+	save_item(NAME(m_zpsd_pd_bus));
+	save_item(NAME(m_zpsd_latched_addr));
+	save_item(NAME(m_zpsd_special_step));
+	save_item(NAME(m_zpsd_program_pulses));
+	save_item(NAME(m_zpsd_diag));
+	save_item(NAME(m_zpsd_program_allow));
+	save_item(NAME(m_payload1_diag));
+	save_item(NAME(m_payload1_pass_path_seen));
+	save_item(NAME(m_payload1_result_seen));
 	machine().add_notifier(MACHINE_NOTIFY_EXIT, machine_notify_delegate(&asma2k_state::gate1a_probe_stop, this));
 	logerror("AS2K_GATE1A PROBE_ACTIVE forbidden=D098-D487,D499-D517,E104-FFBF protected=E102-E103\n");
 }
@@ -874,9 +1004,29 @@ void asma2k_state::machine_reset()
 	m_takeover_seen = false;
 	m_payload1b_fail_seen = false;
 	m_payload1b_cpbf_seen = false;
+	m_payload1_pass_path_seen = false;
+	m_payload1_result_seen = false;
+	m_zpsd_special_step = 0;
+	m_zpsd_program_pulses = 0;
+	m_zpsd_latched_addr = 0xffff;
+	m_zpsd_pb_bus = 0;
+	m_zpsd_pc_bus = 0;
+	m_zpsd_pd_bus = 0;
 
 	if (!m_bootstrap_diag)
 		return;
+
+	if (m_payload1_diag)
+	{
+		memory_region *const stage0 = memregion("stage0");
+		if (!stage0 || stage0->bytes() != 180)
+			fatalerror("AS2K_P1 requires exact 180-byte Payload-1 HC11 image");
+		auto &cpu = downcast<mc68hc11d0_device &>(*m_maincpu);
+		cpu.set_diag_bootstrap(true);
+		cpu.diag_bootstrap_load(stage0->base(), 180, 0x0040);
+		logerror("AS2K_P1 INJECT payload size=180 entry=0040 cpbf=%02X allow_program=%u\n", m_zpsd_cpbf_raw, m_zpsd_program_allow ? 1 : 0);
+		return;
+	}
 
 	if (m_payload1b_cpbf_diag)
 	{
@@ -886,7 +1036,7 @@ void asma2k_state::machine_reset()
 		auto &cpu = downcast<mc68hc11d0_device &>(*m_maincpu);
 		cpu.set_diag_bootstrap(true);
 		cpu.diag_bootstrap_load(stage0->base(), 31, 0x0040);
-		logerror("AS2K_P1B_CPBF INJECT payload size=31 entry=0040 cpbf=%02X\n", m_zpsd_cpbf_diag);
+		logerror("AS2K_P1B_CPBF INJECT payload size=31 entry=0040 cpbf=%02X\n", m_zpsd_cpbf_raw);
 		return;
 	}
 
@@ -968,6 +1118,10 @@ void asma2k_state::asma2k(machine_config &config)
 {
 	alphasmart(config);
 	m_maincpu->in_pa_callback().set(FUNC(asma2k_state::asma2k_port_a_r));
+	m_maincpu->in_pc_callback().set(FUNC(asma2k_state::zpsd_pc_r));
+	m_maincpu->out_pb_callback().set(FUNC(asma2k_state::zpsd_pb_w));
+	m_maincpu->out_pc_callback().set(FUNC(asma2k_state::zpsd_pc_w));
+	m_maincpu->out_pd_callback().set(FUNC(asma2k_state::zpsd_pd_w));
 	m_maincpu->set_addrmap(AS_PROGRAM, &asma2k_state::asma2k_mem);
 	m_maincpu->instruction_callback().set(FUNC(asma2k_state::gate1a_pc_w));
 }
@@ -991,7 +1145,8 @@ void asma2k_state::asma2k1bp(machine_config &config)
 	asma2k(config);
 	m_bootstrap_diag = true;
 	m_payload1b_cpbf_diag = true;
-	m_zpsd_cpbf_diag = 0xef;
+	m_zpsd_cpbf_raw = 0xef;
+	m_zpsd_diag = true;
 }
 
 void asma2k_state::asma2k1bu(machine_config &config)
@@ -999,7 +1154,29 @@ void asma2k_state::asma2k1bu(machine_config &config)
 	asma2k(config);
 	m_bootstrap_diag = true;
 	m_payload1b_cpbf_diag = true;
-	m_zpsd_cpbf_diag = 0xff;
+	m_zpsd_cpbf_raw = 0xff;
+	m_zpsd_diag = true;
+}
+
+
+void asma2k_state::asma2kp1(machine_config &config)
+{
+	asma2k(config);
+	m_bootstrap_diag = true;
+	m_zpsd_diag = true;
+	m_payload1_diag = true;
+	m_zpsd_cpbf_raw = 0xff;
+	m_zpsd_program_allow = true;
+}
+
+void asma2k_state::asma2kp1f(machine_config &config)
+{
+	asma2k(config);
+	m_bootstrap_diag = true;
+	m_zpsd_diag = true;
+	m_payload1_diag = true;
+	m_zpsd_cpbf_raw = 0xff;
+	m_zpsd_program_allow = false;
 }
 
 // MCU: MC68HC11D0P
@@ -1045,6 +1222,20 @@ ROM_START( asma2kbt )
 	ROM_LOAD( "as2k_stage0.bin", 0x0000, 0x001b, CRC(ff5dedf9) SHA1(ab76eafa386311b2ab70ea644345fb15767e908f) )
 ROM_END
 
+ROM_START( asma2kp1 )
+	ROM_REGION( 0x10000, "maincpu", ROMREGION_ERASEFF )
+	ROM_REGION( 0x20000, "spellcheck", ROMREGION_ERASEFF )
+	ROM_REGION( 0x00b4, "stage0", 0 )
+	ROM_LOAD( "as2k_payload1_hc11.bin", 0x0000, 0x00b4, CRC(75988792) SHA1(26a04650d9e5d8efe9e22456c2736badc93672fd) )
+ROM_END
+
+ROM_START( asma2kp1f )
+	ROM_REGION( 0x10000, "maincpu", ROMREGION_ERASEFF )
+	ROM_REGION( 0x20000, "spellcheck", ROMREGION_ERASEFF )
+	ROM_REGION( 0x00b4, "stage0", 0 )
+	ROM_LOAD( "as2k_payload1_hc11.bin", 0x0000, 0x00b4, CRC(75988792) SHA1(26a04650d9e5d8efe9e22456c2736badc93672fd) )
+ROM_END
+
 ROM_START( asma2k1bp )
 	ROM_REGION( 0x10000, "maincpu", ROMREGION_ERASEFF )
 	ROM_REGION( 0x20000, "spellcheck", ROMREGION_ERASEFF )
@@ -1079,5 +1270,7 @@ COMP( 1995, asmapro, 0,      0,      alphasmart, alphasmart, alphasmart_state, e
 COMP( 1997, asma2k,   0,      0,      asma2k,     asma2k,     asma2k_state, empty_init, "Intelligent Peripheral Devices", "AlphaSmart 2000", MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
 COMP( 2026, asma2kbt,  asma2k, 0,      asma2kbt,   asma2k,     asma2k_state, empty_init, "SamDelorean", "AlphaSmart 2000 (Bootstrap Takeover Diagnostic)", MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
 COMP( 2026, asma2k1bf, asma2k, 0,      asma2k1bf,  asma2k,     asma2k_state, empty_init, "SamDelorean", "AlphaSmart 2000 (Payload-1b FAIL Display Test)", MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
+COMP( 2026, asma2kp1,  asma2k, 0,      asma2kp1,   asma2k,     asma2k_state, empty_init, "SamDelorean", "AlphaSmart 2000 (Payload-1 ZPSD Program Model PASS Test)", MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
+COMP( 2026, asma2kp1f, asma2k, 0,      asma2kp1f,  asma2k,     asma2k_state, empty_init, "SamDelorean", "AlphaSmart 2000 (Payload-1 ZPSD Program Model FAIL Test)", MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
 COMP( 2026, asma2k1bp, asma2k, 0,      asma2k1bp,  asma2k,     asma2k_state, empty_init, "SamDelorean", "AlphaSmart 2000 (Payload-1b CPBF PASS Static Test)", MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
 COMP( 2026, asma2k1bu, asma2k, 0,      asma2k1bu,  asma2k,     asma2k_state, empty_init, "SamDelorean", "AlphaSmart 2000 (Payload-1b CPBF FAIL Static Test)", MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
