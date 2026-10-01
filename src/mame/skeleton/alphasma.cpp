@@ -91,6 +91,8 @@ public:
 	void asma2k(machine_config &config);
 	void asma2kbt(machine_config &config);
 	void asma2k1bf(machine_config &config);
+	void asma2k1bp(machine_config &config);
+	void asma2k1bu(machine_config &config);
 
 protected:
 	virtual void machine_start() override ATTR_COLD;
@@ -98,6 +100,7 @@ protected:
 
 private:
 	void lcd_ctrl_w(uint8_t data);
+	uint8_t zpsd_cpbf_diag_r();
 	uint8_t asma2k_port_a_r();
 	virtual void port_a_w(uint8_t data) override;
 	void gate1a_pc_w(uint16_t pc);
@@ -122,6 +125,9 @@ private:
 	bool m_takeover_seen = false;
 	bool m_payload1b_fail_diag = false;
 	bool m_payload1b_fail_seen = false;
+	bool m_payload1b_cpbf_diag = false;
+	bool m_payload1b_cpbf_seen = false;
+	uint8_t m_zpsd_cpbf_diag = 0xff;
 };
 
 INPUT_CHANGED_MEMBER(alphasmart_state::kb_irq)
@@ -400,6 +406,20 @@ void asma2k_state::gate1a_pc_w(uint16_t pc)
 				pc, bank, m_port_a, m_lcd_ctrl);
 		}
 
+		if (m_payload1b_cpbf_diag && !m_payload1b_cpbf_seen && (pc == 0x0056 || pc == 0x005d))
+		{
+			auto &space = m_maincpu->space(AS_PROGRAM);
+			const uint8_t result = space.read_byte(0x00bf);
+			const bool expected_pass = (m_zpsd_cpbf_diag == 0xef);
+			const bool actual_pass = (pc == 0x0056 && result == 0x79);
+			const bool actual_fail = (pc == 0x005d && result == 0x1f);
+			if ((expected_pass && !actual_pass) || (!expected_pass && !actual_fail))
+				fatalerror("AS2K_P1B_CPBF result mismatch cpbf=%02X pc=%04X result=%02X", m_zpsd_cpbf_diag, pc, result);
+			m_payload1b_cpbf_seen = true;
+			logerror("AS2K_P1B_CPBF %s cpbf=%02X result=%02X pc=%04X\n", expected_pass ? "PASS" : "FAIL", m_zpsd_cpbf_diag, result, pc);
+			machine().schedule_exit();
+		}
+
 		if (m_payload1b_fail_diag && pc == 0x008d && !m_payload1b_fail_seen)
 		{
 			m_payload1b_fail_seen = true;
@@ -464,10 +484,17 @@ void asma2k_state::gate1a_pc_w(uint16_t pc)
 // PB1/CS1 as a DictROM-select-class signal, PA6 as the RAM-view/standby gate, and Port C inputs
 // as inert for the recovered stock external decode. See docs/as2k_zpsd211r_static_decode.md before
 // adding mirror mappings or a diagnostic ZPSD layer.
+uint8_t asma2k_state::zpsd_cpbf_diag_r()
+{
+	// Diagnostic-only CPBF mirror. This is NOT a physical ZPSD CPU register.
+	return m_zpsd_cpbf_diag;
+}
+
 void asma2k_state::asma2k_mem(address_map &map)
 {
 	map.unmap_value_high();
 	map(0x0000, 0x7fff).view(m_io_view);
+	m_io_view[0](0x3011, 0x3011).r(FUNC(asma2k_state::zpsd_cpbf_diag_r));
 	m_io_view[0](0x2000, 0x2000).rw(FUNC(asma2k_state::kb_r), FUNC(asma2k_state::kb_matrixh_w));
 	m_io_view[0](0x4000, 0x4000).w(FUNC(asma2k_state::lcd_ctrl_w));
 	m_io_view[0](0x4000, 0x7fff).bankr("dictbank");
@@ -819,6 +846,9 @@ void asma2k_state::machine_start()
 	save_item(NAME(m_takeover_seen));
 	save_item(NAME(m_payload1b_fail_diag));
 	save_item(NAME(m_payload1b_fail_seen));
+	save_item(NAME(m_payload1b_cpbf_diag));
+	save_item(NAME(m_payload1b_cpbf_seen));
+	save_item(NAME(m_zpsd_cpbf_diag));
 	machine().add_notifier(MACHINE_NOTIFY_EXIT, machine_notify_delegate(&asma2k_state::gate1a_probe_stop, this));
 	logerror("AS2K_GATE1A PROBE_ACTIVE forbidden=D098-D487,D499-D517,E104-FFBF protected=E102-E103\n");
 }
@@ -843,9 +873,22 @@ void asma2k_state::machine_reset()
 	alphasmart_state::machine_reset();
 	m_takeover_seen = false;
 	m_payload1b_fail_seen = false;
+	m_payload1b_cpbf_seen = false;
 
 	if (!m_bootstrap_diag)
 		return;
+
+	if (m_payload1b_cpbf_diag)
+	{
+		memory_region *const stage0 = memregion("stage0");
+		if (!stage0 || stage0->bytes() != 31)
+			fatalerror("AS2K_P1B_CPBF requires exact 31-byte static verifier");
+		auto &cpu = downcast<mc68hc11d0_device &>(*m_maincpu);
+		cpu.set_diag_bootstrap(true);
+		cpu.diag_bootstrap_load(stage0->base(), 31, 0x0040);
+		logerror("AS2K_P1B_CPBF INJECT payload size=31 entry=0040 cpbf=%02X\n", m_zpsd_cpbf_diag);
+		return;
+	}
 
 	if (m_payload1b_fail_diag)
 	{
@@ -943,6 +986,22 @@ void asma2k_state::asma2k1bf(machine_config &config)
 	m_payload1b_fail_diag = true;
 }
 
+void asma2k_state::asma2k1bp(machine_config &config)
+{
+	asma2k(config);
+	m_bootstrap_diag = true;
+	m_payload1b_cpbf_diag = true;
+	m_zpsd_cpbf_diag = 0xef;
+}
+
+void asma2k_state::asma2k1bu(machine_config &config)
+{
+	asma2k(config);
+	m_bootstrap_diag = true;
+	m_payload1b_cpbf_diag = true;
+	m_zpsd_cpbf_diag = 0xff;
+}
+
 // MCU: MC68HC11D0P
 // NVRAM: KM681000ALP-7L (or TC551001BPL-85L) + CR2032 battery
 // XTAL: 8.000MHz
@@ -986,6 +1045,20 @@ ROM_START( asma2kbt )
 	ROM_LOAD( "as2k_stage0.bin", 0x0000, 0x001b, CRC(ff5dedf9) SHA1(ab76eafa386311b2ab70ea644345fb15767e908f) )
 ROM_END
 
+ROM_START( asma2k1bp )
+	ROM_REGION( 0x10000, "maincpu", ROMREGION_ERASEFF )
+	ROM_REGION( 0x20000, "spellcheck", ROMREGION_ERASEFF )
+	ROM_REGION( 0x001f, "stage0", 0 )
+	ROM_LOAD( "as2k_p1b_cpbf_static.bin", 0x0000, 0x001f, CRC(f85cc82e) SHA1(c11e9cb8f61ef2ba8681c32dd478ba132bc8755a) )
+ROM_END
+
+ROM_START( asma2k1bu )
+	ROM_REGION( 0x10000, "maincpu", ROMREGION_ERASEFF )
+	ROM_REGION( 0x20000, "spellcheck", ROMREGION_ERASEFF )
+	ROM_REGION( 0x001f, "stage0", 0 )
+	ROM_LOAD( "as2k_p1b_cpbf_static.bin", 0x0000, 0x001f, CRC(f85cc82e) SHA1(c11e9cb8f61ef2ba8681c32dd478ba132bc8755a) )
+ROM_END
+
 ROM_START( asma2k1bf )
 	// Payload-1b FAIL display fixture. This is independently authored test
 	// code derived from the frozen G0 Payload-0 image with only the final
@@ -1006,3 +1079,5 @@ COMP( 1995, asmapro, 0,      0,      alphasmart, alphasmart, alphasmart_state, e
 COMP( 1997, asma2k,   0,      0,      asma2k,     asma2k,     asma2k_state, empty_init, "Intelligent Peripheral Devices", "AlphaSmart 2000", MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
 COMP( 2026, asma2kbt,  asma2k, 0,      asma2kbt,   asma2k,     asma2k_state, empty_init, "SamDelorean", "AlphaSmart 2000 (Bootstrap Takeover Diagnostic)", MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
 COMP( 2026, asma2k1bf, asma2k, 0,      asma2k1bf,  asma2k,     asma2k_state, empty_init, "SamDelorean", "AlphaSmart 2000 (Payload-1b FAIL Display Test)", MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
+COMP( 2026, asma2k1bp, asma2k, 0,      asma2k1bp,  asma2k,     asma2k_state, empty_init, "SamDelorean", "AlphaSmart 2000 (Payload-1b CPBF PASS Static Test)", MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
+COMP( 2026, asma2k1bu, asma2k, 0,      asma2k1bu,  asma2k,     asma2k_state, empty_init, "SamDelorean", "AlphaSmart 2000 (Payload-1b CPBF FAIL Static Test)", MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
