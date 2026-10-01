@@ -90,6 +90,7 @@ public:
 
 	void asma2k(machine_config &config);
 	void asma2kbt(machine_config &config);
+	void asma2k1bf(machine_config &config);
 
 protected:
 	virtual void machine_start() override ATTR_COLD;
@@ -119,6 +120,8 @@ private:
 	uint64_t m_gate1a_instruction_count = 0;
 	bool m_bootstrap_diag = false;
 	bool m_takeover_seen = false;
+	bool m_payload1b_fail_diag = false;
+	bool m_payload1b_fail_seen = false;
 };
 
 INPUT_CHANGED_MEMBER(alphasmart_state::kb_irq)
@@ -395,6 +398,12 @@ void asma2k_state::gate1a_pc_w(uint16_t pc)
 			m_takeover_seen = true;
 			logerror("AS2K_BOOT FIRST_DICT_FETCH pc=%04X bank=%u PA=%02X CTRL=%02X\n",
 				pc, bank, m_port_a, m_lcd_ctrl);
+		}
+
+		if (m_payload1b_fail_diag && pc == 0x008d && !m_payload1b_fail_seen)
+		{
+			m_payload1b_fail_seen = true;
+			logerror("AS2K_P1B_FAIL DISPLAY_READY pc=008D message=FAIL PB\n");
 		}
 
 		if (pc == 0x4010)
@@ -808,6 +817,8 @@ void asma2k_state::machine_start()
 	save_item(NAME(m_gate1a_instruction_count));
 	save_item(NAME(m_bootstrap_diag));
 	save_item(NAME(m_takeover_seen));
+	save_item(NAME(m_payload1b_fail_diag));
+	save_item(NAME(m_payload1b_fail_seen));
 	machine().add_notifier(MACHINE_NOTIFY_EXIT, machine_notify_delegate(&asma2k_state::gate1a_probe_stop, this));
 	logerror("AS2K_GATE1A PROBE_ACTIVE forbidden=D098-D487,D499-D517,E104-FFBF protected=E102-E103\n");
 }
@@ -831,9 +842,31 @@ void asma2k_state::machine_reset()
 {
 	alphasmart_state::machine_reset();
 	m_takeover_seen = false;
+	m_payload1b_fail_seen = false;
 
 	if (!m_bootstrap_diag)
 		return;
+
+	if (m_payload1b_fail_diag)
+	{
+		memory_region *const stage0 = memregion("stage0");
+		if (!stage0 || stage0->bytes() != 127)
+			fatalerror("AS2K_P1B_FAIL requires exact 127-byte stage0 region");
+
+		static constexpr uint8_t expected_message[8] = {
+			'F', 'A', 'I', 'L', ' ', 'P', 'B', 0x00
+		};
+		for (unsigned i = 0; i < sizeof(expected_message); i++)
+			if (stage0->base()[127 - sizeof(expected_message) + i] != expected_message[i])
+				fatalerror("AS2K_P1B_FAIL message mismatch at byte %u", i);
+
+		auto &cpu = downcast<mc68hc11d0_device &>(*m_maincpu);
+		cpu.set_diag_bootstrap(true);
+		cpu.diag_bootstrap_load(stage0->base(), 127, 0x0040);
+
+		logerror("AS2K_P1B_FAIL INJECT payload size=127 entry=0040 message=FAIL PB\n");
+		return;
+	}
 
 	static constexpr uint8_t expected_stage0[] = {
 		0x0f, 0x8e, 0x00, 0xc3, 0x14, 0x3f, 0x04, 0x14, 0x3c,
@@ -903,6 +936,13 @@ void asma2k_state::asma2kbt(machine_config &config)
 	m_bootstrap_diag = true;
 }
 
+void asma2k_state::asma2k1bf(machine_config &config)
+{
+	asma2k(config);
+	m_bootstrap_diag = true;
+	m_payload1b_fail_diag = true;
+}
+
 // MCU: MC68HC11D0P
 // NVRAM: KM681000ALP-7L (or TC551001BPL-85L) + CR2032 battery
 // XTAL: 8.000MHz
@@ -946,10 +986,23 @@ ROM_START( asma2kbt )
 	ROM_LOAD( "as2k_stage0.bin", 0x0000, 0x001b, CRC(ff5dedf9) SHA1(ab76eafa386311b2ab70ea644345fb15767e908f) )
 ROM_END
 
+ROM_START( asma2k1bf )
+	// Payload-1b FAIL display fixture. This is independently authored test
+	// code derived from the frozen G0 Payload-0 image with only the final
+	// eight-byte message changed to "FAIL PB\0".
+	ROM_REGION( 0x10000, "maincpu", ROMREGION_ERASEFF )
+
+	ROM_REGION( 0x20000, "spellcheck", ROMREGION_ERASEFF )
+
+	ROM_REGION( 0x007f, "stage0", 0 )
+	ROM_LOAD( "as2k_payload1b_fail.bin", 0x0000, 0x007f, CRC(e0e98168) SHA1(ff3136f95aff8f74c77eb968ecb684af2905ce40) )
+ROM_END
+
 } // anonymous namespace
 
 
 //    YEAR  NAME     PARENT  COMPAT  MACHINE     INPUT       CLASS             INIT        COMPANY                           FULLNAME           FLAGS
 COMP( 1995, asmapro, 0,      0,      alphasmart, alphasmart, alphasmart_state, empty_init, "Intelligent Peripheral Devices", "AlphaSmart Pro" , MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
 COMP( 1997, asma2k,   0,      0,      asma2k,     asma2k,     asma2k_state, empty_init, "Intelligent Peripheral Devices", "AlphaSmart 2000", MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
-COMP( 2026, asma2kbt, asma2k, 0,      asma2kbt,   asma2k,     asma2k_state, empty_init, "SamDelorean", "AlphaSmart 2000 (Bootstrap Takeover Diagnostic)", MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
+COMP( 2026, asma2kbt,  asma2k, 0,      asma2kbt,   asma2k,     asma2k_state, empty_init, "SamDelorean", "AlphaSmart 2000 (Bootstrap Takeover Diagnostic)", MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
+COMP( 2026, asma2k1bf, asma2k, 0,      asma2k1bf,  asma2k,     asma2k_state, empty_init, "SamDelorean", "AlphaSmart 2000 (Payload-1b FAIL Display Test)", MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
