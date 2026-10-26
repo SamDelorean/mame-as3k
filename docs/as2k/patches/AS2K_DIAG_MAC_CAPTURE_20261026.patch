@@ -311,5 +311,3 @@
          m_pc_frame = 0;
          m_pc_frame_bits = 0;
      }
-
-[executed on device: spc-HP-t640-Thin-Client (dee0b4b6-578a-41a5-88de-73dbeb808983)]
