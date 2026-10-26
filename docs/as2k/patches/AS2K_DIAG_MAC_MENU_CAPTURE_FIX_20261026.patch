@@ -1,0 +1,160 @@
+--- a/src/mame/skeleton/alphasma.cpp
++++ b/src/mame/skeleton/alphasma.cpp
+@@ -211,6 +211,8 @@
+ 	bool m_diag_pc_last = false;
+ 	bool m_diag_mac_last = false;
+ 	bool m_mac_shift = false;
++	bool m_mac_capture_armed = false;
++	uint32_t m_mac_text_bytes = 0;
+ 	bool m_mac_rise_valid = false;
+ 	bool m_mac_started = false;
+ 	uint8_t m_mac_bits = 0;
+@@ -426,8 +428,8 @@
+         return (data & ~uint8_t(0x05)) | 0x01;
+     if (BIT(m_diag_pc->read(), 0))
+         return (data & ~uint8_t(0x05)) | 0x05;
+-    if (BIT(m_diag_mac->read(), 0))
+-        return (data & ~uint8_t(0x05)) | 0x01; // bus released HIGH on PA0, no PC PA2
++    if (BIT(m_diag_mac->read(), 0) || m_connection_mode == 3)
++        return (data & ~uint8_t(0x05)) | 0x01; // Mac ADB bus idle HIGH PA0, PC PA2 LOW
+     return data;
+ }
+ 
+@@ -456,7 +458,7 @@
+     if (connected == m_diag_mac_last)
+         return;
+     m_diag_mac_last = connected;
+-    if (!connected)
++    if (!connected && m_connection_mode != 3)
+     {
+         mac_sink_close();
+         m_mac_bits = 0;
+@@ -511,7 +513,12 @@
+ // This is strictly a passive capture: no firmware RAM/PC injection.
+ void asma2k_state::mac_adb_edge(bool old_level, bool new_level)
+ {
+-    if (!std::getenv("AS2K_DIAG_ADB_SINK") || !std::getenv("AS2K_DIAG_ADB_SINK")[0])
++    char const *flag = std::getenv("AS2K_DIAG_ADB_SINK");
++    bool const opt_in_probe = flag && flag[0] && flag[0] != '0';
++    bool const menu_session = m_connection_mode == 3 && m_mac_capture_armed;
++    // The ordinary Mac accessory selector records SEND without a CLI flag.
++    // Independent external diagnostic input stays explicitly opt-in.
++    if (!menu_session && !(opt_in_probe && BIT(m_diag_mac->read(), 0)))
+         return;
+     uint64_t const ticks = machine().time().as_ticks(2'000'000);
+     if (new_level)
+@@ -561,6 +568,7 @@
+     path_iterator paths(machine().options().media_path());
+     if (!paths.next(rom_directory) || rom_directory.empty())
+         return;
++    m_mac_text_bytes = 0;
+     m_mac_sink = std::make_unique<emu_file>(rom_directory,
+         OPEN_FLAG_WRITE | OPEN_FLAG_CREATE | OPEN_FLAG_CREATE_PATHS);
+     if (std::error_condition const err = m_mac_sink->open("as2kdiag-adb.txt"); err)
+@@ -577,12 +585,13 @@
+     if (m_mac_sink)
+     {
+         m_mac_sink->flush();
+-        logerror("AS2K_ADB_TEXT CLOSE packets=%llu path=%s\n",
+-            static_cast<unsigned long long>(m_mac_packets),m_mac_sink->fullpath());
++        logerror("AS2K_ADB_TEXT CLOSE packets=%llu bytes=%u path=%s\n",
++            static_cast<unsigned long long>(m_mac_packets),unsigned(m_mac_text_bytes),m_mac_sink->fullpath());
+         m_mac_sink->close();
+         m_mac_sink.reset();
+     }
+     m_mac_shift = false;
++    m_mac_text_bytes = 0;
+ }
+ 
+ // US ADB scan-code text conversion, independent of the PC Set-2 decoder.
+@@ -623,6 +632,7 @@
+             char const c = m_mac_shift ? entry.shift : entry.plain;
+             m_mac_sink->write(&c, 1);
+             m_mac_sink->flush();
++            ++m_mac_text_bytes;
+             logerror("AS2K_ADB_TEXT CHAR event=%02X char=%02X\n", event, uint8_t(c));
+         }
+         return;
+@@ -1090,14 +1100,28 @@
+ 		return; // One action per rising key press, not release.
+ 	uint8_t const next = (m_mode_disconnect_next || m_connection_mode == 3)
+ 		? 0 : m_connection_mode + 1;
+-	if (m_connection_mode == 1)
+-		printer_capture_end(next == 0 && m_printer_capture_armed);
+-	m_connection_mode = next;
++    if (m_connection_mode == 1)
++        printer_capture_end(next == 0 && m_printer_capture_armed);
++    if (m_connection_mode == 3 && next != 3)
++    {
++        m_mac_capture_armed = false;
++        mac_sink_close();
++        m_mac_bits = 0;
++        m_mac_started = false;
++        m_mac_rise_valid = false;
++    }
++    if (next == 3 && m_connection_mode != 3)
++    {
++        m_mac_capture_armed = false;
++        m_mac_packets = 0;
++        m_mac_shift = false;
++    }
++    m_connection_mode = next;
+ 	m_mode_disconnect_next = false;
+ 	m_printer_capture_armed = false;
+ 	static constexpr char const *labels[] = {
+ 		"Disconnected (IR available)", "Wired printer", "PC keyboard",
+-		"Mac reserved: electrical interface unverified" };
++		"Mac ADB keyboard (DIAG capture)" };
+ 	logerror("AS2K_CONNECT_MODE selected=%u %s\n", m_connection_mode, labels[m_connection_mode]);
+ 	popmessage("AlphaSmart: %s", labels[m_connection_mode]);
+ }
+@@ -1114,8 +1138,18 @@
+ 		m_mode_disconnect_next = true;
+ 		m_printer_capture_armed = true;
+ 	}
+-	else if (param == 2 && (m_connection_mode == 2 || m_connection_mode == 3)) // Send
+-		m_mode_disconnect_next = true;
++    else if (param == 2 && (m_connection_mode == 2 || m_connection_mode == 3)) // Send
++    {
++        m_mode_disconnect_next = true;
++        if (m_connection_mode == 3)
++        {
++            m_mac_capture_armed = true; // only physical ADB bits become text
++            m_mac_bits = 0;
++            m_mac_started = false;
++            m_mac_rise_valid = false;
++            logerror("AS2K_ADB_CAPTURE ARM mode=3\n");
++        }
++    }
+ }
+ 
+ uint8_t asma2k_state::asma2k_port_a_r()
+@@ -1206,8 +1240,8 @@
+ void asma2k_state::asma2k_port_d_w(uint8_t data)
+ {
+     // ADB: passive PD1 pulse-length recorder; never sample PC Set-2 as ADB.
+-    if (BIT(m_diag_mac->read(), 0) && !BIT(m_diag_pc->read(), 0)
+-        && BIT(m_port_d ^ data, 1))
++    if ((BIT(m_diag_mac->read(), 0) || (m_connection_mode == 3 && m_mac_capture_armed))
++        && !BIT(m_diag_pc->read(), 0) && BIT(m_port_d ^ data, 1))
+         mac_adb_edge(BIT(m_port_d, 1), BIT(data, 1));
+     // Sample actual PD0 falling edge/inverted PD1; verified F46 physical frames.
+     if (m_set2_diag_enabled && (m_connection_mode == 2 || BIT(m_diag_pc->read(), 0))
+@@ -2872,6 +2906,8 @@
+     save_item(NAME(m_mac_frame));
+     save_item(NAME(m_mac_shift));
+     save_item(NAME(m_mac_packets));
++    save_item(NAME(m_mac_capture_armed));
++    save_item(NAME(m_mac_text_bytes));
+     timer_alloc(FUNC(asma2k_state::diag_pc_tick), this)->adjust(
+         attotime::from_msec(10), 0, attotime::from_msec(10));
+ 
+@@ -2924,6 +2960,8 @@
+ 	m_mac_rise_valid = false;
+ 	m_mac_shift = false;
+ 	m_mac_packets = 0;
++	m_mac_capture_armed = false;
++	m_mac_text_bytes = 0;
+ 	if (m_set2_diag_enabled)
+ 	{
+ 		send_sink_end();
