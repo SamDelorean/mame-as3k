@@ -1,0 +1,315 @@
+--- a/src/mame/skeleton/alphasma.cpp
++++ b/src/mame/skeleton/alphasma.cpp
+@@ -107,8 +107,9 @@
+ 		: alphasmart_state(mconfig, type, tag)
+ 		, m_io_view(*this, "io")
+ 		, m_dictbank(*this, "dictbank")
+ 		, m_diag_pc(*this, "DIAG_PC_ATTACHED")
++        , m_diag_mac(*this, "DIAG_MAC_ATTACHED")
+ 		, m_diag_printer(*this, "PRINTER_CONNECTED")
+ 		, m_ir_pai(*this, "IR_PAI")
+ 		, m_ir_rx_fixture(*this, "IR_RX_FIXTURE")
+ 		, m_printer_ready(*this, "PRINTER_READY")
+@@ -129,8 +130,13 @@
+ 	// Opt-in physical PD0/PD1 Set2 observations only.
+ 	void pc_keyboard_reset();
+ 	void pc_clock_rising(bool data);
+ 	void pc_set2_byte(uint8_t data);
++	void mac_adb_edge(bool old_level, bool new_level);
++	void mac_adb_packet(uint16_t data);
++	void mac_adb_event(uint8_t data);
++	void mac_sink_open();
++	void mac_sink_close();
+ 	void pc_key_event(as2k_pc_key key, bool pressed);
+ 	void send_sink_begin();
+ 	void send_sink_codepoint(char32_t codepoint);
+ 	void send_sink_end();
+@@ -196,12 +202,24 @@
+ 	std::unique_ptr<emu_file> m_send_sink;
+     // Physical host-edge probes remain isolated from the original Pause/Break accessory selector.
+     uint8_t diag_pc_port_a_r();
+     void diag_pc_sync();
++    void diag_mac_sync();
+     TIMER_CALLBACK_MEMBER(diag_pc_tick);
+-    required_ioport m_diag_pc;
++	required_ioport m_diag_pc;
++	required_ioport m_diag_mac;
+     required_ioport m_diag_printer;
+-    bool m_diag_pc_last = false;
++	bool m_diag_pc_last = false;
++	bool m_diag_mac_last = false;
++	bool m_mac_shift = false;
++	bool m_mac_rise_valid = false;
++	bool m_mac_started = false;
++	uint8_t m_mac_bits = 0;
++	uint16_t m_mac_frame = 0;
++	uint64_t m_mac_rise_tick = 0;
++	uint64_t m_mac_last_tick = 0;
++	uint64_t m_mac_packets = 0;
++	std::unique_ptr<emu_file> m_mac_sink;
+     bool m_diag_printer_last = false;
+     void diag_printer_sync();
+ 
+ 	required_ioport m_ir_pai;
+@@ -407,8 +425,10 @@
+     if (BIT(m_diag_printer->read(), 0))
+         return (data & ~uint8_t(0x05)) | 0x01;
+     if (BIT(m_diag_pc->read(), 0))
+         return (data & ~uint8_t(0x05)) | 0x05;
++    if (BIT(m_diag_mac->read(), 0))
++        return (data & ~uint8_t(0x05)) | 0x01; // bus released HIGH on PA0, no PC PA2
+     return data;
+ }
+ 
+ void asma2k_state::diag_pc_sync()
+@@ -429,8 +449,26 @@
+     m_maincpu->set_input_line(MC68HC11_IRQ_LINE, ASSERT_LINE);
+     logerror("AS2K_DIAG_PC_HOST_EDGE_WAKE_IRQ attached=%u\n", connected ? 1U : 0U);
+ }
+ 
++void asma2k_state::diag_mac_sync()
++{
++    bool const connected = BIT(m_diag_mac->read(), 0);
++    if (connected == m_diag_mac_last)
++        return;
++    m_diag_mac_last = connected;
++    if (!connected)
++    {
++        mac_sink_close();
++        m_mac_bits = 0;
++        m_mac_started = false;
++        m_mac_rise_valid = false;
++    }
++    // External bus connection only; never write firmware host mode RAM.
++    m_maincpu->set_input_line(MC68HC11_IRQ_LINE, ASSERT_LINE);
++    logerror("AS2K_DIAG_MAC_HOST_EDGE_WAKE_IRQ attached=%u\n", connected ? 1U : 0U);
++}
++
+ void asma2k_state::diag_printer_sync()
+ {
+     bool const connected = BIT(m_diag_printer->read(), 0);
+     if (connected == m_diag_printer_last)
+@@ -446,8 +484,9 @@
+ 
+ TIMER_CALLBACK_MEMBER(asma2k_state::diag_pc_tick)
+ {
+     diag_pc_sync();
++    diag_mac_sync();
+     diag_printer_sync();
+ }
+ 
+ void asma2k_state::pc_keyboard_reset()
+@@ -463,8 +502,148 @@
+ 	m_pc_ralt = false;
+ 	m_pc_caps_lock = false;
+ 	m_pc_alt_numeric_valid = false;
+ 	m_pc_alt_numeric_count = 0;
++}
++
++// Only DIAG mode observes HC11 PD1 physical timings. Stock $8E62 uses
++// high-duration encoding: short=1, long=0, preceded by one start bit.
++// The register 0 payload comprises 16 bits, MSB first, in two bytes.
++// This is strictly a passive capture: no firmware RAM/PC injection.
++void asma2k_state::mac_adb_edge(bool old_level, bool new_level)
++{
++    if (!std::getenv("AS2K_DIAG_ADB_SINK") || !std::getenv("AS2K_DIAG_ADB_SINK")[0])
++        return;
++    uint64_t const ticks = machine().time().as_ticks(2'000'000);
++    if (new_level)
++    {
++        m_mac_rise_tick = ticks;
++        m_mac_rise_valid = true;
++        return;
++    }
++    if (old_level && m_mac_rise_valid)
++    {
++        m_mac_rise_valid = false;
++        uint64_t const high_ticks = ticks - m_mac_rise_tick;
++        // Original $8E62: 10-count high for 1; 22-count high for 0.
++        // 2 MHz E-clock, 5 cycles/AAEC iteration; conservative guard.
++        if (high_ticks < 25 || high_ticks > 300)
++        {
++            m_mac_bits = 0;
++            m_mac_started = false;
++            logerror("AS2K_ADB_PHY BAD_PULSE ticks=%llu\n", static_cast<unsigned long long>(high_ticks));
++            return;
++        }
++        bool const bit = high_ticks < 84;
++        if (!m_mac_started)
++        {
++            if (!bit)
++                return; // Not an ADB start mark.
++            m_mac_started = true;
++            m_mac_bits = 0;
++            m_mac_frame = 0;
++            return;
++        }
++        m_mac_frame = (m_mac_frame << 1) | unsigned(bit);
++        if (++m_mac_bits == 16)
++        {
++            mac_adb_packet(m_mac_frame);
++            m_mac_started = false;
++            m_mac_bits = 0;
++        }
++    }
++}
++
++void asma2k_state::mac_sink_open()
++{
++    if (m_mac_sink)
++        return;
++    std::string rom_directory;
++    path_iterator paths(machine().options().media_path());
++    if (!paths.next(rom_directory) || rom_directory.empty())
++        return;
++    m_mac_sink = std::make_unique<emu_file>(rom_directory,
++        OPEN_FLAG_WRITE | OPEN_FLAG_CREATE | OPEN_FLAG_CREATE_PATHS);
++    if (std::error_condition const err = m_mac_sink->open("as2kdiag-adb.txt"); err)
++    {
++        logerror("AS2K_ADB_TEXT OPEN_FAIL %s\n", err.message());
++        m_mac_sink.reset();
++    }
++    else
++        logerror("AS2K_ADB_TEXT OPEN path=%s\n", m_mac_sink->fullpath());
++}
++
++void asma2k_state::mac_sink_close()
++{
++    if (m_mac_sink)
++    {
++        m_mac_sink->flush();
++        logerror("AS2K_ADB_TEXT CLOSE packets=%llu path=%s\n",
++            static_cast<unsigned long long>(m_mac_packets),m_mac_sink->fullpath());
++        m_mac_sink->close();
++        m_mac_sink.reset();
++    }
++    m_mac_shift = false;
++}
++
++// US ADB scan-code text conversion, independent of the PC Set-2 decoder.
++void asma2k_state::mac_adb_event(uint8_t event)
++{
++    bool const release = BIT(event, 7);
++    uint8_t const key = event & 0x7f;
++    if (key == 0x38 || key == 0x3c)
++    {
++        m_mac_shift = !release;
++        return;
++    }
++    if (release || key == 0x7f || event == 0xff)
++        return;
++    static constexpr struct { uint8_t key; char plain; char shift; } us[] = {
++        {0x00,'a','A'}, {0x0b,'b','B'}, {0x08,'c','C'}, {0x02,'d','D'},
++        {0x0e,'e','E'}, {0x03,'f','F'}, {0x05,'g','G'}, {0x04,'h','H'},
++        {0x22,'i','I'}, {0x26,'j','J'}, {0x28,'k','K'}, {0x25,'l','L'},
++        {0x2e,'m','M'}, {0x2d,'n','N'}, {0x1f,'o','O'}, {0x23,'p','P'},
++        {0x0c,'q','Q'}, {0x0f,'r','R'}, {0x01,'s','S'}, {0x11,'t','T'},
++        {0x20,'u','U'}, {0x09,'v','V'}, {0x0d,'w','W'}, {0x07,'x','X'},
++        {0x10,'y','Y'}, {0x06,'z','Z'}, {0x1d,'0',')'}, {0x12,'1','!'},
++        {0x13,'2','@'}, {0x14,'3','#'}, {0x15,'4','$'}, {0x17,'5','%'},
++        {0x16,'6','^'}, {0x1a,'7','&'}, {0x1c,'8','*'}, {0x19,'9','('},
++        {0x31,' ',' '}, {0x24,'\n','\n'}, {0x30,'\t','\t'},
++        {0x32,'`','~'}, {0x1b,'-','_'}, {0x18,'=','+'},
++        {0x21,'[','{'}, {0x1e,']','}'}, {0x2a,'\\','|'},
++        {0x29,';',':'}, {0x27,'\'','"'}, {0x2b,',','<'},
++        {0x2f,'.','>'}, {0x2c,'/','?'}
++    };
++    for (auto const &entry : us)
++    {
++        if (entry.key != key)
++            continue;
++        mac_sink_open();
++        if (m_mac_sink)
++        {
++            char const c = m_mac_shift ? entry.shift : entry.plain;
++            m_mac_sink->write(&c, 1);
++            m_mac_sink->flush();
++            logerror("AS2K_ADB_TEXT CHAR event=%02X char=%02X\n", event, uint8_t(c));
++        }
++        return;
++    }
++    logerror("AS2K_ADB_TEXT NON_TEXT event=%02X\n", event);
++}
++
++void asma2k_state::mac_adb_packet(uint16_t packet)
++{
++    ++m_mac_packets;
++    uint8_t const key1 = packet >> 8;
++    uint8_t const key2 = packet;
++    logerror("AS2K_ADB_PHY TALK_PACKET n=%llu value=%04X\n",
++        static_cast<unsigned long long>(m_mac_packets), unsigned(packet));
++    // ADB Register3 keyboard identity is 0x62/0x01; it is not text.
++    if (key1 == 0x62 && key2 == 0x01)
++        return;
++    mac_adb_event(key1);
++    if (key2 != 0xff)
++        mac_adb_event(key2);
+ }
+ 
+ void asma2k_state::pc_clock_rising(bool data)
+ {
+@@ -1025,8 +1204,12 @@
+ }
+ 
+ void asma2k_state::asma2k_port_d_w(uint8_t data)
+ {
++    // ADB: passive PD1 pulse-length recorder; never sample PC Set-2 as ADB.
++    if (BIT(m_diag_mac->read(), 0) && !BIT(m_diag_pc->read(), 0)
++        && BIT(m_port_d ^ data, 1))
++        mac_adb_edge(BIT(m_port_d, 1), BIT(data, 1));
+     // Sample actual PD0 falling edge/inverted PD1; verified F46 physical frames.
+     if (m_set2_diag_enabled && (m_connection_mode == 2 || BIT(m_diag_pc->read(), 0))
+             && BIT(m_port_d, 0) && !BIT(data, 0))
+     {
+@@ -2507,8 +2690,10 @@
+ 	PORT_START("PRINTER_CONNECTED")
+ 	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_OTHER) PORT_NAME("DIAG wired printer attached (external input)")
+ 	PORT_START("DIAG_PC_ATTACHED")
+ 	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_OTHER) PORT_NAME("DIAG host PC attached (independent external input)")
++	PORT_START("DIAG_MAC_ATTACHED")
++	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_OTHER) PORT_NAME("DIAG Macintosh ADB attached (independent external input)")
+ INPUT_PORTS_END
+ 
+ void alphasmart_state::alphasmart_palette(palette_device &palette) const
+ {
+@@ -2677,11 +2862,17 @@
+     pc_keyboard_reset();
+     if (m_set2_diag_enabled)
+         logerror("AS2K_DIAG_SET2_SINK_ACTIVE physical_pd0_pd1=1 output=as2kdiag-set2.txt\n");
+     m_diag_pc_last = false;
++    m_diag_mac_last = false;
+     m_diag_printer_last = false;
+     save_item(NAME(m_diag_pc_last));
++    save_item(NAME(m_diag_mac_last));
+     save_item(NAME(m_diag_printer_last));
++    save_item(NAME(m_mac_bits));
++    save_item(NAME(m_mac_frame));
++    save_item(NAME(m_mac_shift));
++    save_item(NAME(m_mac_packets));
+     timer_alloc(FUNC(asma2k_state::diag_pc_tick), this)->adjust(
+         attotime::from_msec(10), 0, attotime::from_msec(10));
+ 
+ 	m_dictbank->configure_entries(0, 8, memregion("spellcheck")->base(), 0x4000);
+@@ -2726,11 +2917,17 @@
+ {
+     m_sdk_entry_seen.fill(false);
+     m_zpsd_io_read_count.fill(0);
+     m_zpsd_io_write_count.fill(0);
+-    if (m_set2_diag_enabled)
+-    {
+-        send_sink_end();
++	mac_sink_close();
++	m_mac_bits = 0;
++	m_mac_started = false;
++	m_mac_rise_valid = false;
++	m_mac_shift = false;
++	m_mac_packets = 0;
++	if (m_set2_diag_enabled)
++	{
++		send_sink_end();
+         pc_keyboard_reset();
+         m_pc_frame = 0;
+         m_pc_frame_bits = 0;
+     }
+
+[executed on device: spc-HP-t640-Thin-Client (dee0b4b6-578a-41a5-88de-73dbeb808983)]
