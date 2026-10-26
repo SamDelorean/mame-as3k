@@ -1,0 +1,84 @@
+--- a/src/devices/cpu/mc68hc11/mc68hc11.h
++++ b/src/devices/cpu/mc68hc11/mc68hc11.h
+@@ -59,8 +59,9 @@
+ 
+ 	void set_default_config(uint8_t data) { assert(!configured()); m_config = data & m_config_mask; }
+ 	// Enabled only by the AS2000 Gate 1A diagnostic driver in this isolated build.
+ 	void set_as2k_gate1a_probe(bool enabled) { assert(!configured()); m_as2k_gate1a_probe = enabled; }
++	void set_as2k_ir_observer(bool enabled) { assert(!configured()); m_as2k_ir_observer = enabled; }
+ 
+ protected:
+ 	mc68hc11_cpu_device(const machine_config &mconfig, device_type type, const char *tag, device_t *owner, uint32_t clock, uint16_t ram_size, uint16_t reg_block_size, uint16_t rom_size, uint16_t eeprom_size, uint8_t init_value, uint8_t config_mask, uint8_t option_mask);
+ 
+@@ -171,8 +172,9 @@
+ 	uint16_t m_sp;
+ 	uint16_t m_pc;
+ 	uint16_t m_ppc;
+ 	bool m_as2k_gate1a_probe = false;
++	bool m_as2k_ir_observer = false;
+ 	bool m_as2k_gate1a_started = false;
+ 	bool m_as2k_gate1a_forbidden_seen = false;
+ 	// DIAG-only bounded pre-entry history for Gate 1B; no firmware side effects.
+ 	uint16_t m_as2k_gate1b_pc_history[32] = {};
+--- a/src/devices/cpu/mc68hc11/mc68hc11.cpp
++++ b/src/devices/cpu/mc68hc11/mc68hc11.cpp
+@@ -1371,8 +1371,23 @@
+ 		else
+ 		{
+ 			m_ppc = m_pc;
+ 			m_instruction_cb(m_pc);
++			// IrDA callbacks are independent of the retired Gate 1A audit.
++			// Observe real stock instruction PCs/bytes; never synthesize IRQ,
++			// RAM state, payload or a success response.
++			if (m_as2k_ir_observer)
++			{
++				uint16_t const irpc = m_ppc;
++				if (irpc == 0xd1ef)
++					m_as2k_ir_tx_cb(m_d.d8.b);
++				else if (irpc == 0xd220) m_as2k_ir_event_cb(0x01);
++				else if (irpc == 0xd0d7) m_as2k_ir_event_cb(0x30);
++				else if (irpc == 0xd2dc) m_as2k_ir_event_cb(0x10);
++				else if (irpc == 0x9719) m_as2k_ir_event_cb(0x11);
++				else if (irpc == 0xd437) m_as2k_ir_event_cb(0x20);
++				else if (irpc == 0xd47d) m_as2k_ir_event_cb(0x21);
++			}
+ 			// Gate 1A instruction-PC observer; no debugger, opcode or firmware changes.
+ 			if (m_as2k_gate1a_probe)
+ 			{
+ 				if (!m_as2k_gate1a_started)
+--- a/src/mame/skeleton/alphasma.cpp
++++ b/src/mame/skeleton/alphasma.cpp
+@@ -2138,9 +2138,23 @@
+ 			}
+ 			logerror("AS2K_IR_PEER FILE_DATA bytes=%u total=%u\n", app_bytes, m_ir_peer_text_bytes);
+ 		}
+ 		if (app_send_eof)
++		{
++			// F46 DIAG: only a protocol-observed TinyTP EOF closes the
++			// receive artifact; link resets/aborts are not successful SENDs.
+ 			m_ir_peer_file_receive = false;
++			if (m_ir_text)
++			{
++				m_ir_text->flush();
++				logerror("AS2K_IR_SEND_CAPTURE EOF bytes=%u path=%s status=COMPLETE\n",
++					m_ir_peer_text_bytes, m_ir_text->fullpath());
++				m_ir_text->close();
++				m_ir_text.reset();
++			}
++			else
++				logerror("AS2K_IR_SEND_CAPTURE EOF bytes=%u status=NO_FILE\n", m_ir_peer_text_bytes);
++		}
+ 		uint8_t receive_pending = 0;
+ 		if (app_receive_ack && m_ir_peer_receive_phase == 1)
+ 			receive_pending = 15;
+ 		else if (app_receive_ack && m_ir_peer_receive_phase == 2)
+@@ -3069,8 +3083,9 @@
+ 	m_maincpu->in_pa_callback().set(FUNC(asma2k_state::diag_pc_port_a_r));
+ 	m_maincpu->out_pd_callback().set(FUNC(asma2k_state::asma2k_port_d_w));
+ 	m_maincpu->set_addrmap(AS_PROGRAM, &asma2k_state::asma2k_mem);
+ 	m_maincpu->set_as2k_gate1a_probe(false);
++	m_maincpu->set_as2k_ir_observer(true);
+ 	m_maincpu->as2k_ir_tx_callback().set(FUNC(asma2k_state::ir_tx_byte_w));
+ 	m_maincpu->as2k_ir_event_callback().set(FUNC(asma2k_state::ir_event_w));
+ 	m_maincpu->instruction_callback().set(FUNC(asma2k_state::gate1b_p0c_pc_w));
+ }
