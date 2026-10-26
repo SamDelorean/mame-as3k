@@ -27,3 +27,15 @@ Este paquete no cambia PC/Set-2 ni IrDA y no autoriza marcar F46 CLOSED.
 ## Integración posterior obligatoria
 
 Combinar selectivamente las declaraciones/entradas Macintosh y el sumidero ADB con el controlador remoto actual, preservando diagnósticos ZPSD, modos bootstrap y trabajo local anterior. Compilar y repetir una sola prueba de captura en el DIAG resultante antes de declarar integrado el parche.
+
+
+## Corrección adicional: selección y registro Macintosh (26/oct/2026)
+
+- Parche incremental publicado: `docs/as2k/patches/AS2K_DIAG_MAC_MENU_CAPTURE_FIX_20261026.patch`. Aplicar **después** del parche base `AS2K_DIAG_MAC_CAPTURE_20261026.patch`, sobre la copia T640 compatible, no sobre el remoto divergente sin conciliación.
+- Selector normal **Pause/Break** recorre Desconectado → Impresora → PC → **Mac ADB keyboard (DIAG capture)**, sin usar `DIAG_MAC_ATTACHED` en la prueba de menú.
+- El modo Mac mantiene **PA0 alto, PA2 bajo** en reposo, captura se arma al pulsar SEND y se desarma/cierra al desconectar.
+- El modo Mac en el selector normal **no requiere** `AS2K_DIAG_ADB_SINK`. La entrada diagnóstica independiente sí conserva ese opt-in.
+- Al cerrar se registra `AS2K_ADB_TEXT CLOSE packets=21 bytes=7` y se guarda `as2kdiag-adb.txt` con el contenido exacto `ABC 123`.
+- **PASS**: compilación/enlace GCC 15.2.0; MAME-DIAG 21 paquetes físicos PD1, cursor DynFS=7, STACK 61/62 y documento/portapapeles invariantes. Captura verificada con variable ADB desactivada.
+- Evidencia local T640: `/home/spc/Projects/alphasmart/F46_DIAG_RESULTS/as2k_writer_f46_mac_menu_noflag_20261026/results/`.
+- **No es una sesión autónoma**: los comandos `Talk` continúan suministrados ya decodificados por el guion; receptor físico ADB F46 pendiente. F46 sigue abierta.
