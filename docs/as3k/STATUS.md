@@ -1,6 +1,6 @@
 # AlphaSmart 3000 emulator — development status
 
-Last updated: 2026-08-26
+Last updated: 2026-10-27
 
 This document is the public handoff for AlphaSmart 3000 emulator development on branch `as3k-mame0289-dev` of `SamDelorean/mame-as3k`.
 
@@ -132,6 +132,37 @@ make SUBTARGET=alphasma3k SOURCES=src/mame/skeleton/alphasma3k.cpp OSD=sdl REGEN
 ```
 
 Executable: `./alphasma3k`
+
+## R2 — Original System 3 Flash ROM selection (2026-10-27)
+
+The original driver and three historical diagnostics are retained unchanged.
+Two independent optional private Flash ROM systems are now registered in
+src/mame/skeleton/alphasma3k.cpp:
+
+- asma3ksb: OS3K_MIN_BOOT.bin, 1 MiB, CRC32 ac3b2a2c,
+  SHA-1 c2936532f37514d0eaa74e2cf97bf96bb17e883d;
+- asma3ksw: OS3K_MIN_WRITER.bin, 1 MiB, CRC32 c79df93f,
+  SHA-1 02ae5d564b48476abf7067b71a7e0166e471bdfa.
+
+Their source files are private under ../private/roms/as3k/os3k_minimal/
+The MAME ROM search directory is ../private/roms/as3k/mame_sets/
+with private asma3ksb and asma3ksw directory symlinks.
+No firmware bytes are stored in Git.
+
+MAME executable alphasma3k (128,810,144 bytes, x86-64 ELF) linked
+successfully on 2026-10-28: BUILD_EXIT=0. The source registry file
+src/mame/mame.lst additionally lists both new systems, so -listfull
+reports six AS3K machines. Both -verifyroms audits pass with exit code 0
+using the private ROM path and existing private ks0066 font ROMs.
+MAME reports ks0066_f05.bin as NEEDS REDUMP / best available, which is
+a known CGROM fidelity warning, not a failure to locate either OS3K ROM.
+The original firmware was not executed.
+
+These are AS3000 2005 System 3 construction variants, distinct from the
+physical ROM asma3k and older AlphaWord diagnostic fixtures. Integration
+does not certify actual System 3 / Writer boot: the R1 transfer contract
+was verified statically only. R4 is the runtime boot milestone.
+Keyboard Port-A corrections remain R3.
 
 ## Known gaps
 

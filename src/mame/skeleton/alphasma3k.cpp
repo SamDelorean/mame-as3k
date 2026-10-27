@@ -302,6 +302,20 @@ ROM_START( asma3k )
 	ROM_LOAD16_WORD( "28f008b3.u1", 0x000000, 0x100000, CRC(73a24834) SHA1(a47e6a6d286feaba4e671a6373632222113f9276) )
 ROM_END
 
+// Private AS3000 System 3 (Nov 2005) Flash builds. The binaries are held
+// outside the repository; neither variant replaces the physical 28f008b3.u1 dump.
+// Small ROM, native OS segments and (Writer only) A000 are at manufacturer
+// addresses. ROM presence does not establish completed firmware boot.
+ROM_START( asma3ksb )
+	ROM_REGION16_BE( 0x100000, "ipl", 0 )
+	ROM_LOAD16_WORD( "OS3K_MIN_BOOT.bin", 0x000000, 0x100000, CRC(ac3b2a2c) SHA1(c2936532f37514d0eaa74e2cf97bf96bb17e883d) )
+ROM_END
+
+ROM_START( asma3ksw )
+	ROM_REGION16_BE( 0x100000, "ipl", 0 )
+	ROM_LOAD16_WORD( "OS3K_MIN_WRITER.bin", 0x000000, 0x100000, CRC(c79df93f) SHA1(02ae5d564b48476abf7067b71a7e0166e471bdfa) )
+ROM_END
+
 // Local AS3000 startup diagnostics built from archived AlphaSmart development artifacts.
 // These are synthetic test fixtures, not physical ROM dumps.
 ROM_START( asma3kdi )
@@ -323,6 +337,8 @@ ROM_END
 
 //    YEAR  NAME    PARENT COMPAT MACHINE       INPUT         CLASS               INIT        COMPANY             FULLNAME           FLAGS
 COMP( 2000, asma3k, 0,     0,     alphasmart3k, alphasmart3k, alphasmart3k_state, empty_init, "AlphaSmart, Inc.", "AlphaSmart 3000", MACHINE_NO_SOUND | MACHINE_NOT_WORKING )
+COMP( 2005, asma3ksb, 0,     0,     alphasmart3k, alphasmart3k, alphasmart3k_state, empty_init, "AlphaSmart, Inc.", "AlphaSmart 3000 System 3 (minimal boot Flash, private)", MACHINE_NO_SOUND | MACHINE_NOT_WORKING )
+COMP( 2005, asma3ksw, 0,     0,     alphasmart3k, alphasmart3k, alphasmart3k_state, empty_init, "AlphaSmart, Inc.", "AlphaSmart 3000 System 3 (AlphaWord Plus Flash, private)", MACHINE_NO_SOUND | MACHINE_NOT_WORKING )
 COMP( 2000, asma3kdi, 0,    0,     alphasmart3k_diag, alphasmart3k, alphasmart3k_state, empty_init, "AlphaSmart, Inc.", "AlphaSmart 3000 startup diagnostic (invalid applet)", MACHINE_NO_SOUND | MACHINE_NOT_WORKING )
 COMP( 2000, asma3kdv, 0,    0,     alphasmart3k_diag, alphasmart3k, alphasmart3k_state, empty_init, "AlphaSmart, Inc.", "AlphaSmart 3000 startup diagnostic (valid AlphaWord)", MACHINE_NO_SOUND | MACHINE_NOT_WORKING )
 COMP( 2000, asma3kdvl, asma3kdv, 0, alphasmart3k, alphasmart3k, alphasmart3k_state, empty_init, "AlphaSmart, Inc.", "AlphaSmart 3000 startup diagnostic (valid AlphaWord + LCD bridge)", MACHINE_NO_SOUND | MACHINE_NOT_WORKING )
