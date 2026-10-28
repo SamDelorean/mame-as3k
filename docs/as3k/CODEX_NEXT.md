@@ -1,4 +1,11 @@
-# Current Codex task — implement only MC68EZ328 Port-A PAPUEN / WDTH8 fidelity
+# CLOSED HISTORICAL HANDOFF — MC68EZ328 Port-A PAPUEN / WDTH8 fidelity
+
+> CLOSED / DYNAMIC_PASS — 2026-10-28. This retained historical
+> specification is NOT a pending Codex task. Implemented in the ONE canonical
+> AS3K-DIAG build (local commit 07840d51145). See
+> docs/as3k/CODEX_RESULT.md and STATUS.md for factual results and R4.
+> Do not launch Codex, repeat R3, create another MAME tree or interpret
+> the old pull/push instructions below as current authorization.
 
 Date: 2026-08-26
 

@@ -55,3 +55,66 @@ The final-source rerun repeated the `0xFF` watchpoint, normal RTS/caller return,
 - The debugger script and logs remain outside Git. No ROM, proprietary material, fixture, generated binary, or build artifact is included.
 - Final `git diff --check`: passed.
 - Pre-commit tracked status contains only `src/mame/skeleton/alphasma3k.cpp`, `docs/as3k/STATUS.md`, and `docs/as3k/CODEX_RESULT.md`; post-publication status is clean.
+
+
+## R3 — MC68EZ328 Port-A PAPUEN / WDTH8 (2026-10-28)
+
+**CLOSED / BUILD_PASS / PHASE1_DYNAMIC_PASS (bounded), no R4 boot test.**
+This section supersedes the previous next-stage status, but retains the
+historical external-latch proof above for traceability.
+
+Files changed:
+- src/devices/machine/mc68328.cpp and .h: EZ-only PAPUEN mapped
+  0xFFFFF402, state resets 0xFF, read/write/save; PADATA missing-
+  callback GPIO input defaults to PAPUEN bit, original MC68328
+  fallback remains zero; external callback/output latch priority preserved;
+  SCR.WDTH8 now both sets/clears m_pasel 0xFF/0x00, stores only WDTH8
+  bit to m_scr preserving unrelated bits, and EZ m_pasel is saved.
+  0xFFFFF403 remains reserved, no fictitious PASEL.
+- src/mame/skeleton/alphasma3k.cpp: MAME R2 ROM filenames use
+  lowercase labels os3k_min_boot.bin / os3k_min_writer.bin; existing
+  proprietary ROM bytes untouched, local-only symlink aliases inside
+  the same private ROM directories. This closes a runtime MAME validity
+  issue discovered during R3 test; there is still only ONE AS3K-DIAG.
+
+Source: NXP MC68EZ328UM pages for Ports A/SCR, especially PAPUEN,
+reset 0xFF, and data-pin mux controlled by WDTH8; the physical
+manufacturer guide: https://www.nxp.com/docs/en/reference-manual/MC68EZ328UM.pdf.
+
+Command: TMPDIR=/dev/shm make SUBTARGET=alphasma3k
+SOURCES=src/mame/skeleton/alphasma3k.cpp OSD=sdl -j3
+=> BUILD_EXIT=0, linked the same ./alphasma3k executable.
+./alphasma3k -validate => exit 0.
+ROM audit (rompath ../private/roms/as3k/mame_sets;../private/roms):
+asma3kdi and asma3kdv GOOD; asma3ksb and asma3ksw BEST_AVAILABLE;
+4 romsets found, 4 were OK, exit 0. KS0066 F05 remains
+NEEDS REDUMP, a previously known CGROM issue.
+
+Bounded real CPU test against historical AlphaWord fixture asma3kdv,
+using built-in Qt debugger in offscreen mode and private script
+r3_keyboard_phase1_20261028.cmd:
+- SCRIPT_LOADED;
+- SCR wrote 0x1D from PC=0x0040001E;
+- PAPUEN initial read at Phase 1: D0=0xFF;
+- PAPUEN write via Phase 1: 0x80;
+- following D0 still 0x80;
+- external 0x00600000 latch write: 0xFF;
+- Phase 1 RTS at 0x0042E2EE D0=0;
+- caller-return at 0x00420168 D0=0 and debugger exited;
+- no entered Phase 2 (breakpoint at 0x0042E2F0 did not fire),
+  and no unrelated new IRQ/exception or PAPUEN unmapped warning.
+- Two already-present unmapped startup accesses to FFFFFD0C
+  and FFFFFD0E are unrelated to R3 and not repaired here.
+
+Not independently established:
+- debugger memory SCR read showed 0x00 although the CPU watchpoint
+  proved the SCR write of 0x1D; readback is not reliable here.
+  This ambiguity is explicitly NOT marked PASS.
+- WDTH8 clear transition is source-verified, not CPU-exercised.
+- No complete System3/Writer BOOT_PASS, no matrix, PDSEL, PDKBEN,
+  IRQ, UART, or dynamic ROM selection work.
+
+Source-scoped git diff --check PASS. No temporary logging added to
+C++ source; debugger script and logs remain in private. No firmware
+or generated executables staged or published. Git commit hash and
+push disposition recorded separately in the final status.

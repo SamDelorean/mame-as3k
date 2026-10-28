@@ -308,12 +308,12 @@ ROM_END
 // addresses. ROM presence does not establish completed firmware boot.
 ROM_START( asma3ksb )
 	ROM_REGION16_BE( 0x100000, "ipl", 0 )
-	ROM_LOAD16_WORD( "OS3K_MIN_BOOT.bin", 0x000000, 0x100000, CRC(ac3b2a2c) SHA1(c2936532f37514d0eaa74e2cf97bf96bb17e883d) )
+	ROM_LOAD16_WORD( "os3k_min_boot.bin", 0x000000, 0x100000, CRC(ac3b2a2c) SHA1(c2936532f37514d0eaa74e2cf97bf96bb17e883d) )
 ROM_END
 
 ROM_START( asma3ksw )
 	ROM_REGION16_BE( 0x100000, "ipl", 0 )
-	ROM_LOAD16_WORD( "OS3K_MIN_WRITER.bin", 0x000000, 0x100000, CRC(c79df93f) SHA1(02ae5d564b48476abf7067b71a7e0166e471bdfa) )
+	ROM_LOAD16_WORD( "os3k_min_writer.bin", 0x000000, 0x100000, CRC(c79df93f) SHA1(02ae5d564b48476abf7067b71a7e0166e471bdfa) )
 ROM_END
 
 // Local AS3000 startup diagnostics built from archived AlphaSmart development artifacts.

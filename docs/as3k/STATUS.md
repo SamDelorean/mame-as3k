@@ -1,10 +1,80 @@
 # AlphaSmart 3000 emulator — development status
 
-Last updated: 2026-10-27
+Last updated: 2026-10-28
 
 This document is the public handoff for AlphaSmart 3000 emulator development on branch `as3k-mame0289-dev` of `SamDelorean/mame-as3k`.
 
 The branch is based on exact MAME 0.289 commit `f34f02505e32c1993c6a782b6814232cbfc74e36` and is intentionally separate from `master`.
+
+## Mandatory AS3K-DIAG development rules — 2026-10-28
+
+AS3K-DIAG is the **only** emulator product, based on the existing
+mame-as3k-dev MAME 0.289 source tree. Never create isolated versions,
+new source forks, alternate executables, external worktrees or stand-alone
+emulators to support a particular ROM. Historical ROM sets and diagnostic
+fixtures are *data inputs*, not emulator versions.
+
+ROM selection must ultimately be dynamic (including a graphical selector),
+supporting any hardware-compatible AS3000 ROM/firmware release without
+recompiling or hardcoding firmware-version-specific jumps, offsets or patches.
+BOOT and WRITER System3 ROMs are reference images, not permanent design
+constraints. The product emulates real MC68EZ328/board hardware, not a
+particular firmware.
+
+Use the **same reduced/minimal MAME build and incremental STATIC_FIRST
+methodology as AS2K-DIAG**, preserving existing working modules, source
+provenance, one canonical working tree, directed tests and PASS/FAIL evidence.
+Minimal refers to MAME dependencies, never to omission of real AS3000
+hardware functionality. All testing/instrumentation remains inside the
+same AS3K-DIAG. No blind fixes, new unrelated stages, routine Codex or
+untested PASS assertions; update this status and Drive work log every
+increment. No firmware binaries, ROMs, CGROM or generated executables in Git.
+
+R2 compiled executable currently named alphasma3k remains a single
+technical build of the canonical tree, not permission to produce another
+emulator line. The multiple registered MAME names are ROM/diagnostic
+variants only. The universal ROM selector is a later planned integration;
+do not fold it into the narrowly defined R3 Port-A work.
+
+## R3 — EZ328 Port A / WDTH8 (2026-10-28) — CLOSED / DYNAMIC_PASS
+
+The original NXP MC68EZ328UM confirms PAPUEN at 0xFFFFF402 (8 bits,
+reset 0xFF), reserved 0xFFFFF403, and SCR.WDTH8 selecting GPIO PA[7:0]
+instead of external D[7:0]. Reference:
+https://www.nxp.com/docs/en/reference-manual/MC68EZ328UM.pdf
+
+The same existing AS3K-DIAG's mc68328.cpp/h were minimally corrected:
+EZ-only PAPUEN map/read/write/reset/save; disconnected input fallback
+follows PAPUEN while a connected callback takes priority. The
+mc68328_device base fallback stays zero to preserve its old behavior.
+EZ SCR.WDTH8 now sets AND clears internal m_pasel (0xff/0x00),
+preserves other SCR bits, and saves m_pasel in the EZ state path.
+No EZ PASEL was registered at 0xFFFFF403.
+
+MAME 0.289 reduced rebuild + final link: BUILD_EXIT=0; MAME validity:
+exit 0. Labels of the two private System3 ROMs were made lowercase
+inside MAME only, with local filesystem aliases to the original data,
+to satisfy MAME runtime label validation (without changing ROM bytes).
+All four relevant romset audits passed; the already-known KS0066 F05
+NEEDS REDUMP warning remains for BOOT/WRITER.
+
+The bounded original AlphaWord diagnostic asma3kdv reached:
+SCR write 0x1d at 0x0040001e; PAPUEN read 0xff at 0x0042e2bc;
+PAPUEN write 0x80 at 0x0042e2c4; external latch write 0xff
+at 0x0042e2c8; Phase-1 RTS at 0x0042e2ee with D0=0 and normal
+caller return 0x00420168 with D0=0. No Phase 2, new IRQ or
+unrelated fault handler executed in this bounded trace.
+PAPUEN had no unmapped access warnings. Two unrelated startup
+unmapped accesses at 0xFFFFFD0C and 0xFFFFFD0E persist; not R3.
+A debugger-space SCR byte read printed 0x00 despite the traced
+SCR write of 0x1d; that direct readback remains ambiguous, not a
+proof that SCR stored 0x00. WDTH8 clear path was SOURCE-verified
+only; not exercised dynamically. Full system boot not claimed.
+
+Evidence: docs/as3k/CODEX_RESULT.md, and local PRIVATE scripts/logs
+under ../private/roms/as3k/mame_sets/r3_*.
+Next PLAN milestone R4: original System3 execution in the same
+AS3K-DIAG, with no firmware-specific shortcuts.
 
 ## Current execution frontier
 
@@ -162,23 +232,21 @@ These are AS3000 2005 System 3 construction variants, distinct from the
 physical ROM asma3k and older AlphaWord diagnostic fixtures. Integration
 does not certify actual System 3 / Writer boot: the R1 transfer contract
 was verified statically only. R4 is the runtime boot milestone.
-Keyboard Port-A corrections remain R3.
+Keyboard Port-A core corrections closed in R3; future matrix and Port-D stages remain separate.
 
 ## Known gaps
 
-The emulator is not yet a complete usable AlphaSmart 3000. Remaining work includes EZ PAPUEN/Port-A fidelity, PA/latch-to-PD matrix plumbing, PDSEL, later PDKBEN keyboard interrupt behavior, actual MAME input-port/key mapping, Phase 2 and later AlphaWord modules, dynamic chip-select/remapping fidelity, power/battery behavior, UART/RS-232, ADB, PS/2, IrDA, USB/PDIUSBD11D, Flash update/write behavior, measured LCD timing/colors, exact controller confirmation, and an explicit synthetic four-row visual fixture.
+The emulator is not yet a complete usable AlphaSmart 3000. Remaining work includes PA/latch-to-PD matrix plumbing, PDSEL, later PDKBEN keyboard interrupt behavior, actual MAME input-port/key mapping, Phase 2 and later AlphaWord modules, dynamic chip-select/remapping fidelity, power/battery behavior, UART/RS-232, ADB, PS/2, IrDA, USB/PDIUSBD11D, Flash update/write behavior, measured LCD timing/colors, exact controller confirmation, and an explicit synthetic four-row visual fixture.
 
 ## Next development step
 
-Implement **only** the next EZ Port-A core-fidelity stage:
-
-- add PAPUEN state, reset/save handling, mapping, and Port-A input pull-up fallback;
-- make the existing `SCR.WDTH8` Port-A selection state accurate and saveable without adding a fake EZ PASEL register at reserved address `0xFFFFF403`;
-- validate this core change independently before adding driver matrix callbacks or key mappings;
-- do not execute Phase 2 or add PDSEL/PDKBEN interrupt behavior in the same stage;
-- preserve the validated external latch, `asma3kdi`/`asma3kdv` startup behavior, and LCD bridge behavior.
-
-The evidence-first development method remains: original source/listings → exact linked behavior → narrow dynamic test → static core audit where needed → minimum demonstrated implementation → regression test → public documentation.
+R3 Port-A PAPUEN/WDTH8 is closed by bounded CPU dynamic evidence.
+Continue with the existing R4 milestone: boot the original AS3000
+System3 on the SAME AS3K-DIAG executable, then reuse the LCD bridge.
+Only fix a demonstrated hardware-emulation blocker; no ROM-version-
+specific patches, isolated builds, keyboard Phase 2 or unrelated work.
+The validated historical latch, RAM, display, and startup paths remain
+unchanged. Maintain STATIC_FIRST -> minimal patch -> bounded validation.
 
 ## Reproducibility and contribution notes
 

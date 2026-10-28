@@ -287,6 +287,7 @@ void mc68ez328_device::internal_map(address_map &map)
 	base_internal_map(0xfffff000, map);
 
 	map(0xfffff004, 0xfffff007).r(FUNC(mc68ez328_device::revision_r));
+	map(0xfffff402, 0xfffff402).rw(FUNC(mc68ez328_device::papuen_r), FUNC(mc68ez328_device::papuen_w));
 
 	map(0xfffff110, 0xfffff111).rw(FUNC(mc68ez328_device::csa_r), FUNC(mc68ez328_device::csa_w));
 	map(0xfffff112, 0xfffff113).rw(FUNC(mc68ez328_device::csb_r), FUNC(mc68ez328_device::csb_w));
@@ -533,6 +534,7 @@ void mc68ez328_device::device_reset()
 {
 	mc68328_base_device::device_reset();
 
+	m_papuen = 0xff;
 	m_csa = 0x00e0;
 	m_csb = 0x0000;
 	m_csc = 0x0000;
@@ -706,6 +708,8 @@ void mc68ez328_device::register_state_save()
 {
 	mc68328_base_device::register_state_save();
 
+	save_item(NAME(m_pasel));
+	save_item(NAME(m_papuen));
 	save_item(NAME(m_pwmp));
 	save_item(NAME(m_pwmcnt));
 	save_item(NAME(m_pwmfifo));
@@ -974,11 +978,28 @@ u16 mc68328_device::csd_lsw_r() // 0x11e, 0x12e, 0x13e, 0x14e
 
 void mc68ez328_device::scr_w(u8 data)
 {
-	if (data & SCR_WDTH8)
-	{
-		m_pasel = 0xff;
-	}
 	mc68328_base_device::scr_w(data);
+	// On EZ, WDTH8 controls whether Port A is GPIO or the D[7:0] bus.
+	// Preserve all unrelated SCR bits until their behavior is modeled.
+	m_scr = (m_scr & ~SCR_WDTH8) | (data & SCR_WDTH8);
+	m_pasel = (data & SCR_WDTH8) ? 0xff : 0x00;
+}
+
+void mc68ez328_device::papuen_w(u8 data)
+{
+	LOGMASKED(LOG_GPIO_A, "%s: papuen_w: PAPUEN = %02x\n", machine().describe_context(), data);
+	m_papuen = data;
+}
+
+u8 mc68ez328_device::papuen_r()
+{
+	LOGMASKED(LOG_GPIO_A, "%s: papuen_r: PAPUEN: %02x\n", machine().describe_context(), m_papuen);
+	return m_papuen;
+}
+
+u8 mc68ez328_device::port_a_input_fallback(int pin) const
+{
+	return BIT(m_papuen, pin);
 }
 
 u8 mc68ez328_device::revision_r(offs_t offset)
@@ -1525,6 +1546,10 @@ u8 mc68328_base_device::padata_r() // 0x401
 			else if (!m_in_port_a_cb[i].isunset())
 			{
 				data |= m_in_port_a_cb[i]() << i;
+			}
+			else
+			{
+				data |= port_a_input_fallback(i) << i;
 			}
 		}
 	}

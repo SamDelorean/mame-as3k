@@ -443,6 +443,7 @@ protected:
 	void ipr_msw_w(offs_t offset, u16 data, u16 mem_mask);
 	void ipr_lsw_w(offs_t offset, u16 data, u16 mem_mask);
 
+	virtual u8 port_a_input_fallback(int pin) const { return 0; }
 	void padir_w(u8 data);
 	void padata_w(u8 data);
 	void pbdir_w(u8 data);
@@ -1129,6 +1130,9 @@ private:
 	static constexpr u32 INT_MEMIQ_MASK          = 1 << INT_MEMIQ;
 
 	virtual void scr_w(u8 data) override;
+	void papuen_w(u8 data);
+	u8 papuen_r();
+	virtual u8 port_a_input_fallback(int pin) const override;
 
 	void csa_w(offs_t offset, u16 data, u16 mem_mask);
 	void csb_w(offs_t offset, u16 data, u16 mem_mask);
@@ -1170,6 +1174,9 @@ private:
 	u16 watchdog_r();
 	u16 dayr_r();
 	u16 dayalarm_r();
+
+	// 0xFFFFF402: Port A pull-up enable (EZ only)
+	u8 m_papuen;
 
 	// $(FF)FFF100
 	u16 m_csa;          // Group A Chip-Select Register
