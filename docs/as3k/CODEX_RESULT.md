@@ -191,3 +191,39 @@ No firmware modification or user binaries in Git.
 Flash writing, crash recovery and exhaustive file operations
 NOT credited. R8_AS3K_BATTERY_SRAM_PERSISTENCE_20261031.md contains
 full private test evidence. R9 next; no push.
+
+## R9 — Intel B3 Flash / original SmartApplet install and boot (2026-10-31)
+
+CLOSED / FLASH_PROGRAM_PASS / ERASE_PASS / MANUFACTURER_APPLET_PASS.
+The same minimal AS3K-DIAG now uses a byte-wide Intel 28F008B3B
+flash device (89/D3) derived minimally from the native MAME
+intelfsh core, with 8x8-KiB parameter and 15x64-KiB main
+blocks, NOR programming, and native persistent Flash NVRAM.
+All original ROM images are unchanged input data.
+The 68k 16-bit bus bridge preserves flash byte lanes and Flash
+command semantics. No new emulators or alternate executable.
+
+Native CPU-space test: Intel ID 89/D3, blank FF, programmed
+A5, NOR reprogram FF kept A5, erase 20/D0 busy 00 and
+returned FF. Independent parameter test erased exactly lower
+8 KiB, all remaining original BOOT bytes unaffected.
+Genuine manufacturer AlphaWordPlus.OS3KApp (101596 bytes)
+was byte-programmed into the empty applet window of the
+original BOOT image and saved as 1-MiB private Flash NVRAM.
+Installed region matched original manufacturer file byte-for-byte;
+all outside bytes matched original BOOT.
+Reopen original BOOT, System3 discovered applet and launched
+real AlphaWord: native keyboard typed 'flash', genuine LCD
+displayed it. Another reopen without input recovered 'flash'
+with pixel-identical 240x36 screenshot. Original R8 SRAM
+'r8proof' recovery was regression tested and pixel-identical.
+
+Reduced make REGENIE=1 PRECOMPILE=0 built and linked exit0,
+MAME -validate exit0, all 4 ROM audits OK, R4 System3 boot
+and R3 KeyboardInitialize Phase1 D0=0 PASS. Existing F05
+NEEDS REDUMP notice unrelated. Chip top/bottom suffix on
+actual PCB, VPP/lock behavior and official AlphaSmart Manager
+USB/serial transfer protocol remain NOT credited.
+Report: R9_INTEL_FLASH_SMARTAPPLET_20261031.md.
+Private test logs, manufacturer applet and programmed RAM/Flash
+are outside Git. No Codex or push. Next R10 external I/O.

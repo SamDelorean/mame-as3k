@@ -43,6 +43,7 @@ Two version updaters known:
 #include "machine/mc68328.h"
 #include "machine/ram.h"
 #include "machine/nvram.h"
+#include "machine/intelfsh.h"
 #include "video/hd44780.h"
 #include "emupal.h"
 #include "screen.h"
@@ -61,6 +62,7 @@ public:
 		, m_lcdc1(*this, "ks0066_1")
 		, m_ram(*this, RAM_TAG)
 		, m_nvram(*this, "nvram")
+		, m_flash(*this, "flash")
 		, m_ipl(*this, "ipl")
 		, m_keys(*this, "COL%u", 0U)
 		, m_battery_status(*this, "BATTERY")
@@ -77,6 +79,7 @@ protected:
 	optional_device<ks0066_device> m_lcdc1;
 	required_device<ram_device> m_ram;
 	required_device<nvram_device> m_nvram;
+	required_device<intel_28f008b3b_device> m_flash;
 	required_region_ptr<u16> m_ipl;
 	required_ioport_array<16> m_keys;
 	required_ioport m_battery_status;
@@ -93,6 +96,8 @@ private:
 	void alphasmart3k_palette(palette_device &palette) const;
 	u32 screen_update(screen_device &screen, bitmap_ind16 &bitmap, const rectangle &cliprect);
 	void main_map(address_map &map) ATTR_COLD;
+	u16 flash_r(offs_t offset, u16 mem_mask = ~0);
+	void flash_w(offs_t offset, u16 data, u16 mem_mask = ~0);
 	void keyboard_column_latch_w(u8 data);
 	void keyboard_port_a_w(unsigned bit, int state);
 	int keyboard_row_r(unsigned row);
@@ -300,10 +305,28 @@ u32 alphasmart3k_state::screen_update(screen_device &screen, bitmap_ind16 &bitma
 	return 0;
 }
 
+u16 alphasmart3k_state::flash_r(offs_t offset, u16 mem_mask)
+{
+	u16 result = 0xffff;
+	if (ACCESSING_BITS_8_15)
+		result = (result & 0x00ff) | (u16(m_flash->read(offset * 2)) << 8);
+	if (ACCESSING_BITS_0_7)
+		result = (result & 0xff00) | m_flash->read(offset * 2 + 1);
+	return result;
+}
+
+void alphasmart3k_state::flash_w(offs_t offset, u16 data, u16 mem_mask)
+{
+	if (ACCESSING_BITS_8_15)
+		m_flash->write(offset * 2, data >> 8);
+	if (ACCESSING_BITS_0_7)
+		m_flash->write(offset * 2 + 1, data & 0xff);
+}
+
 void alphasmart3k_state::main_map(address_map &map)
 {
 //  map(0x0000'0000, 0x0003'ffff).ram().share("ram");
-	map(0x0040'0000, 0x004f'ffff).rom().region("ipl", 0);
+	map(0x0040'0000, 0x004f'ffff).rw(FUNC(alphasmart3k_state::flash_r), FUNC(alphasmart3k_state::flash_w));
 	// The 32 KiB chip-select window is known, but source only proves this byte address is decoded.
 	map(0x0060'0000, 0x0060'0001).w(FUNC(alphasmart3k_state::keyboard_column_latch_w)).umask16(0xff00);
 }
@@ -519,6 +542,7 @@ void alphasmart3k_state::alphasmart3k(machine_config &config)
 
 	RAM(config, RAM_TAG).set_default_size("256K");
 	NVRAM(config, "nvram", nvram_device::DEFAULT_ALL_0);
+	INTEL_28F008B3B(config, m_flash);
 
 	SOFTWARE_LIST(config, "kapps_list").set_original("alphasmart_kapps");
 }
@@ -535,6 +559,8 @@ void alphasmart3k_state::alphasmart3k_diag(machine_config &config)
 ROM_START( asma3k )
 	ROM_REGION16_BE( 0x100000, "ipl", 0 )
 	ROM_LOAD16_WORD( "28f008b3.u1", 0x000000, 0x100000, CRC(73a24834) SHA1(a47e6a6d286feaba4e671a6373632222113f9276) )
+	ROM_REGION( 0x100000, "flash", 0 )
+	ROM_COPY( "ipl", 0x000000, 0x000000, 0x100000 )
 ROM_END
 
 // Private AS3000 System 3 (Nov 2005) Flash builds. The binaries are held
@@ -544,11 +570,15 @@ ROM_END
 ROM_START( asma3ksb )
 	ROM_REGION16_BE( 0x100000, "ipl", 0 )
 	ROM_LOAD16_WORD( "os3k_min_boot.bin", 0x000000, 0x100000, CRC(ac3b2a2c) SHA1(c2936532f37514d0eaa74e2cf97bf96bb17e883d) )
+	ROM_REGION( 0x100000, "flash", 0 )
+	ROM_COPY( "ipl", 0x000000, 0x000000, 0x100000 )
 ROM_END
 
 ROM_START( asma3ksw )
 	ROM_REGION16_BE( 0x100000, "ipl", 0 )
 	ROM_LOAD16_WORD( "os3k_min_writer.bin", 0x000000, 0x100000, CRC(c79df93f) SHA1(02ae5d564b48476abf7067b71a7e0166e471bdfa) )
+	ROM_REGION( 0x100000, "flash", 0 )
+	ROM_COPY( "ipl", 0x000000, 0x000000, 0x100000 )
 ROM_END
 
 // Local AS3000 startup diagnostics built from archived AlphaSmart development artifacts.
@@ -556,16 +586,22 @@ ROM_END
 ROM_START( asma3kdi )
 	ROM_REGION16_BE( 0x100000, "ipl", 0 )
 	ROM_LOAD16_WORD( "as3k_diag_invalid_applet.u1", 0x000000, 0x100000, CRC(6432156f) SHA1(bfe849333e32887241f73d0146776001df093ccc) )
+	ROM_REGION( 0x100000, "flash", 0 )
+	ROM_COPY( "ipl", 0x000000, 0x000000, 0x100000 )
 ROM_END
 
 ROM_START( asma3kdv )
 	ROM_REGION16_BE( 0x100000, "ipl", 0 )
 	ROM_LOAD16_WORD( "as3k_diag_valid_alphaword.u1", 0x000000, 0x100000, CRC(08d1bf77) SHA1(f1b545de5a96f755df7f1f0302a78d8ab68bd505) )
+	ROM_REGION( 0x100000, "flash", 0 )
+	ROM_COPY( "ipl", 0x000000, 0x000000, 0x100000 )
 ROM_END
 
 ROM_START( asma3kdvl )
 	ROM_REGION16_BE( 0x100000, "ipl", 0 )
 	ROM_LOAD16_WORD( "as3k_diag_valid_alphaword.u1", 0x000000, 0x100000, CRC(08d1bf77) SHA1(f1b545de5a96f755df7f1f0302a78d8ab68bd505) )
+	ROM_REGION( 0x100000, "flash", 0 )
+	ROM_COPY( "ipl", 0x000000, 0x000000, 0x100000 )
 ROM_END
 
 } // anonymous namespace

@@ -125,6 +125,7 @@ DEFINE_DEVICE_TYPE(SST_49LF020,              sst_49lf020_device,              "s
 
 DEFINE_DEVICE_TYPE(SHARP_LH28F400,           sharp_lh28f400_device,           "sharp_lh28f400",           "Sharp LH28F400 Flash")
 DEFINE_DEVICE_TYPE(INTEL_E28F008SA,          intel_e28f008sa_device,          "intel_e28f008sa",          "Intel E28F008SA Flash")
+DEFINE_DEVICE_TYPE(INTEL_28F008B3B,          intel_28f008b3b_device,          "intel_28f008b3b",          "Intel 28F008B3 Bottom Boot Flash")
 DEFINE_DEVICE_TYPE(INTEL_TE28F160,           intel_te28f160_device,           "intel_te28f160",           "Intel TE28F160 Flash")
 DEFINE_DEVICE_TYPE(SHARP_LH28F160S3,         sharp_lh28f160s3_device,         "sharp_lh28f160s3",         "Sharp LH28F160S3 Flash")
 DEFINE_DEVICE_TYPE(INTEL_TE28F320,           intel_te28f320_device,           "intel_te28f320",           "Intel TE28F320 Flash")
@@ -249,6 +250,9 @@ amd_29lv200t_device::amd_29lv200t_device(const machine_config &mconfig, const ch
 
 cat28f020_device::cat28f020_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock)
 	: intelfsh8_device(mconfig, CAT28F020, tag, owner, clock, 0x40000, MFG_CATALYST, 0xbd) { }
+
+intel_28f008b3b_device::intel_28f008b3b_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock)
+	: intelfsh8_device(mconfig, INTEL_28F008B3B, tag, owner, clock, 0x100000, MFG_INTEL, 0xd3) { }
 
 intel_e28f008sa_device::intel_e28f008sa_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock)
 	: intelfsh8_device(mconfig, INTEL_E28F008SA, tag, owner, clock, 0x100000, MFG_INTEL, 0xa2) { }
@@ -1066,7 +1070,10 @@ void intelfsh_device::write_full(uint32_t address, uint32_t data)
 		switch( m_bits )
 		{
 		case 8:
-			m_data[address] = data;
+			if (type() == INTEL_28F008B3B)
+				m_data[address] &= data; // NOR programming clears bits only
+			else
+				m_data[address] = data;
 			break;
 		case 16:
 			m_data[address*2] = data >> 8;
@@ -1147,6 +1154,15 @@ void intelfsh_device::write_full(uint32_t address, uint32_t data)
 				memset(&m_data[base & ~0xff], 0xff, 256);
 
 				m_timer->adjust( attotime::from_msec( 4 ) );
+			}
+			else if (type() == INTEL_28F008B3B)
+			{
+				// 28F008B3B: eight 8K parameter blocks and fifteen 64K main blocks.
+				u32 const start = address < 0x10000 ? (address & ~0x1fffU) : (address & ~0xffffU);
+				u32 const bytes = address < 0x10000 ? 0x2000 : 0x10000;
+				memset(&m_data[start], 0xff, bytes);
+				m_erase_sector = start;
+				m_timer->adjust(attotime::from_msec(address < 0x10000 ? 250 : 1000));
 			}
 			else if (m_maker_id == MFG_INTEL && m_device_id == 0x4471)
 			{

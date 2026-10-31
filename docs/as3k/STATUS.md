@@ -76,6 +76,51 @@ under ../private/roms/as3k/mame_sets/r3_*.
 Next PLAN milestone R4: original System3 execution in the same
 AS3K-DIAG, with no firmware-specific shortcuts.
 
+## R9 — Intel 28F008B3 Flash / SmartApplet installation (2026-10-31) — CLOSED / PASS
+
+The ONE AS3K-DIAG MAME reduced executable now models the physical
+1-MiB Intel 28F008B3 byte-wide Flash command interface rather than
+a read-only memory mapping. A minimal new B3 bottom-boot variant of
+MAME's existing intelfsh device provides identification 89/D3,
+NOR 1-to-0 programming, 8 x 8-KiB parameter blocks and 15 x
+64-KiB main blocks. Normal MAME Flash NVRAM persists modifications
+independently of the existing 256-KiB battery SRAM. All original
+ROMs stay unchanged and are merely initial data inputs.
+
+Verified Intel commands via CPU address space: 90h identification;
+40h/data program and 80h ready status; illegal 0-to-1 reprogramming
+does not change data; 20h/D0h block erase returns FF without
+altering the boot region. A separate 8-KiB parameter erase
+changed only the first 8,192 bytes, with all other 1-MiB
+Flash content byte-identical to the original BOOT ROM.
+
+**Real manufacturer SmartApplet installation PASS:**
+programmed the 101,596-byte original AlphaWordPlus.OS3KApp
+via the Intel Flash bus into the empty applet space of
+the original asma3ksb BOOT image. The saved 1-MiB Flash
+matches the manufacturer applet byte-for-byte and retains
+all other original BOOT bytes. A new process with the SAME
+BOOT ROM and programmed private Flash ran original System3,
+recognized the newly installed AlphaWord applet, opened File 1,
+and displayed text 'flash' typed through MAME's real keyboard.
+A third process recovered the SAME text with pixel-identical
+LCD image, without typing. No new WRITER ROM was fabricated.
+
+Minimal build/link PASS with REGENIE=1 PRECOMPILE=0,
+MAME validation PASS, 4/4 ROM audit PASS (old KS0066
+F05 NEEDS REDUMP warning unchanged), original System3 boot PASS,
+historical R3 keyboard Phase1 D0=0 PASS, and R8
+SRAM document 'r8proof' recovered pixel-identically.
+No code outside the existing emulator and its Flash device.
+
+The manufacturer's actual 28F008B3 physical top/bottom suffix
+was not evidenced directly; bottom-boot ID D3 is used here.
+Official AlphaSmart Manager transport, VPP/WP protection,
+lock features and crash safety are NOT claimed. Report:
+docs/as3k/R9_INTEL_FLASH_SMARTAPPLET_20261031.md;
+private test scripts, programmed NVRAM and PNGs remain outside Git.
+R10 external interfaces remain future/planned, not started.
+
 ## R8 — SRAM/document persistence (2026-10-31) — CLOSED / PASS
 
 The original external HY62U8200 256 KiB RAM device is now backed by
@@ -248,8 +293,8 @@ The original WRITER ROM starts AlphaWord Plus and accepts real
 keyboard text. The complete battery-backed external SRAM now survives
 a normal emulator shutdown and a fresh MAME process. After typing
 r8proof the original editor recovered the SAME text and cursor without
-key input in the second run. Original Flash writing and SmartApplet
-updates are not yet validated; next R9.
+key input in the second run. Original Flash programming and SmartApplet installation were
+validated in R9; external transfer protocols remain in R10.
 
 Historical AlphaWord diagnostic Phase 1 remains PASS with D0=0.
 Other peripherals remain scoped to existing later milestones.
@@ -411,11 +456,11 @@ The emulator is not yet a complete hardware-fidelity AlphaSmart 3000. R3-R8 accr
 
 ## Next development step
 
-R8 battery-backed external SRAM and original AlphaWord text restoration
-on separate process launches: CLOSED / PASS. Continue established R9
-Flash write/erase and SmartApplet install fidelity, same single minimal
-AS3K-DIAG source/executable. Preserve all working ROM and R3-R8 paths;
-no isolated builds or speculative extensions.
+R9 original Intel B3 Flash programming, block erase, installation
+of the genuine AlphaWord Plus SmartApplet and its launch from
+BOOT: CLOSED / PASS. Keep the SAME reduced AS3K-DIAG and all R3–R9
+regressions. R10 covers external interfaces only if needed; no extra
+emulator versions or unrelated development.
 
 ## Reproducibility and contribution notes
 
