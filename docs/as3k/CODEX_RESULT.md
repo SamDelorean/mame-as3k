@@ -140,3 +140,17 @@ The CPU awaits real key input at 0x004D0FD8. Key mapping, Writer
 launch and memory integrity are NOT claimed PASS. -validate PASS,
 4/4 ROM audit PASS, known CGROM F05 warning. No source edits.
 See R5_SYSTEM3_LCD_DUAL_KS0066_20261031.md and private R5 logs.
+
+
+## R6 — Original host input, physical matrix and key recognition (2026-10-31)
+CLOSED / BUILD_PASS / CPU_KEY_PASS / MATRIX_PASS. Reused original
+KeyboardModule.c column arrays and PC key positions. The single
+AS3K-DIAG now has 16 logical 8-row ports (power col8 excluded),
+77 identified MAME keys and supported natural-keyboard typing.
+CPU BOOT Y 0F accepted and released; WRITER N 7F accepted and
+released; natural MAME y accepted. Direct CPU-visible hardware
+inputs both ROMs: FF idle, FE latch, EF PA, EE both.
+R3 Phase1 regression, R5 LCD image equivalence, -validate and
+4/4 ROM audits PASS. Integrity warning, full Writer launch,
+PDSEL/PDKBEN IRQ behavior NOT credited. Complete detail in
+R6_AS3K_KEYBOARD_MATRIX_20261031.md, logs private.

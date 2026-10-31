@@ -76,6 +76,33 @@ under ../private/roms/as3k/mame_sets/r3_*.
 Next PLAN milestone R4: original System3 execution in the same
 AS3K-DIAG, with no firmware-specific shortcuts.
 
+## R6 — Physical 15x8 keyboard, ROM-independent (2026-10-31) — CLOSED
+
+Original manufacturer KeyboardModule.c recovered and used, not
+reconstructed by guesses. The single AS3K-DIAG now connects actual
+seven Port-A and eight 74HC574 latch output columns to eight
+externally idle-high Port-D rows. Logical ICode column order
+0=latch7, 1..7=PA0..6, 8=power (excluded),
+9..F=latch0..6. The nonsequential order corrects earlier shorthand
+about X1..X15. Seventy-seven documented physical keys are
+bound to native MAME host keycodes, with natural-character mapping
+for 49 key positions; unknown keys remain unassigned.
+
+REAL CPU test: original BOOT firmware accepted and released
+Y scan code 0F; original WRITER accepted/released N code 7F,
+at original CPU routines 004D1018 and 004D1024. Normal MAME
+natural keypost also generated original Y code 0F.
+Direct hardware matrix tests on BOTH original ROMs:
+rows idle FF, latch Y FE, Port-A Enter EF, both pressed EE.
+Historical R3 Phase1 regression PASS; no-key LCD images remain
+pixel-identical to R5; -validate PASS, 4/4 ROM audit PASS,
+reduced MAME build/link PASS.
+
+Data integrity warning, full AlphaWord launch and PDSEL/PDKBEN
+interrupt behavior NOT credited as complete. Full evidence:
+docs/as3k/R6_AS3K_KEYBOARD_MATRIX_20261031.md; logs and
+test scripts are private. Next milestone: original R7.
+
 ## R5 — Genuine System 3 LCD (2026-10-31) — CLOSED / DISPLAY_PASS
 
 The existing Port C -> two KS0066 bridge and 40x4 (240x36)
@@ -209,8 +236,9 @@ The display is modeled as two independent 2×40 controllers: rows 1–2 from E1/
 
 Historical AlphaSmart source/listings establish a **15-column × 8-row** keyboard matrix:
 
-- X1–X8: external 8-bit latch at `0x00600000`;
-- X9–X15: PA0–PA6;
+- Eight physical columns: external 74HC574 latch at 0x00600000;
+- Seven physical columns: PA0–PA6;
+- Firmware logical scan: 0=latch bit7; 1..7=PA0..6; 8=power; 9..F=latch0..6 (R6 verified).
 - Y1–Y8: PD0–PD7;
 - scan is active-low;
 - idle rows are externally pulled high;
@@ -253,7 +281,7 @@ Development should remain staged:
 
 1. **Driver-only external latch at `0x00600000`** — complete and dynamically validated.
 2. **EZ Port-A core fidelity** — PAPUEN plus correct/saveable `SCR.WDTH8` selection behavior; do not add a fake PASEL register.
-3. **Driver matrix plumbing** — connect PA0–PA6 outputs and latch X1–X8 to PD0–PD7 row evaluators, with externally idle-high rows and support for multiple active-low columns.
+3. **Driver matrix plumbing** — CLOSED in R6: original Port-A/latch selection, PD row evaluators and simultaneous key support.
 4. **EZ PDSEL fidelity** — add correct upper-nibble mux state/behavior.
 5. **Keyboard interrupt stage** — implement PDKBEN/PKBDINT active-low OR and audit/fix related Port-D interrupt semantics immediately before the firmware actually enables keyboard interrupts.
 
