@@ -1044,6 +1044,9 @@ class mc68ez328_device : public mc68328_base_device
 {
 public:
 	mc68ez328_device(const machine_config &mconfig, const char *tag, device_t *owner, u32 clock);
+	// The EZ has one masked level-sensitive keyboard OR interrupt, not
+	// the original MC68328 per-line keyboard interrupt arrangement.
+	void port_d_in_w(int state, int bit);
 
 protected:
 	// device_t implementation
@@ -1132,6 +1135,9 @@ private:
 	virtual void scr_w(u8 data) override;
 	void papuen_w(u8 data);
 	u8 papuen_r();
+	void pdkben_w(u8 data);
+	u8 pdkben_r();
+	void update_keyboard_irq();
 	virtual u8 port_a_input_fallback(int pin) const override;
 
 	void csa_w(offs_t offset, u16 data, u16 mem_mask);
@@ -1177,6 +1183,8 @@ private:
 
 	// 0xFFFFF402: Port A pull-up enable (EZ only)
 	u8 m_papuen;
+	// 0xFFFFF41E: EZ active-low row keyboard OR-interrupt enable.
+	u8 m_pdkben;
 
 	// $(FF)FFF100
 	u16 m_csa;          // Group A Chip-Select Register

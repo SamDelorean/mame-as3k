@@ -76,6 +76,47 @@ under ../private/roms/as3k/mame_sets/r3_*.
 Next PLAN milestone R4: original System3 execution in the same
 AS3K-DIAG, with no firmware-specific shortcuts.
 
+## R7 — Original AlphaWord Plus discovery, launch, typing (2026-10-31) — CLOSED / FUNCTIONAL_PASS
+
+A real CPU read watchpoint at 00408000, PC=004C3254,
+saw FFFFFFFF in BOOT but C0FFEEAD SmartApplet header in WRITER.
+MAME firmware therefore truly discovers the manufacturer
+AlphaWordPlus.OS3KApp only on the WRITER image.
+Original System3 integrity alert: host Y acknowledged it,
+then native Enter/Return restarted the firmware as requested.
+The real AlphaWord Plus 3.0 / System 3.01 splash followed.
+
+Two exact hardware defects blocked getting into and typing
+in the original editor: PG4 had no normal-battery board signal;
+manufacturer PowerIsBatteryLow requires PGDATA bit4 high,
+so a real configurable BATTERY signal (normal high) was wired.
+Then the CPU entered an original STOP sleep at about
+004D12BE (PC observed 004D12C4) and no keys could wake it:
+a CPU watchpoint proved PDKBEN=FF at FFFFF41E
+(PC=004CE98C) but the EZ core did not implement the register.
+Added EZ-only PDKBEN read/write/reset/save and masked active-low
+PortD keyboard OR to INT_KB (CPU IRQ4); host key and column
+changes update physical lines for the interrupt detector.
+
+After the above real hardware fixes, the genuine 2005
+AlphaWord Plus editor displays 'hello' typed via MAME's
+natural keyboard (without ROM or LCD text patches).
+Original 240x36 LCD screenshots changed from 5 to 100
+active pixels, with readable text and cursor.
+This is APPLET_DISCOVERY_PASS / BOOT_PASS /
+EDITOR_TYPING_PASS within R7's scope, NOT
+document persistence or all-apps/full-peripherals PASS.
+
+The SAME minimal AS3K-DIAG binary was relinked successfully,
+-validate PASS, four ROM audits PASS (known CGROM F05
+NEEDS REDUMP), R3 keyboard Phase1 regression PASS,
+and BOOT/WRITER no-key R5 LCD screenshots remain
+identical. Complete report and evidence index:
+docs/as3k/R7_ORIGINAL_ALPHAWORD_LAUNCH_TYPING_20261031.md.
+The original initial data-change warning can still occur
+on a fresh state; permanent persistence is the next
+existing R8 stage. PDSEL mux fidelity is not credited in R7.
+
 ## R6 — Physical 15x8 keyboard, ROM-independent (2026-10-31) — CLOSED
 
 Original manufacturer KeyboardModule.c recovered and used, not
@@ -179,10 +220,12 @@ already accredited bridge, no redesign. AS3K-DIAG remains the only
 minimal emulator; private ROMs are data inputs, not product variants.
 
 ## Current execution frontier
-On genuine System 3 BOOT and WRITER, the LCD has displayed the
-original data-change warning using both KS0066 controllers; the
-CPU is now observed waiting for actual physical keyboard input at
-0x004D0FD8. This is the current functional UI frontier after R5.
+The original WRITER ROM now discovers and starts AlphaWord Plus
+3.0 / System 3.01; the native editor accepts MAME keyboard text
+and renders 'hello' on both KS0066 controllers. Earlier
+first-boot integrity and low-battery dialogs were traced to
+firmware behavior and real missing board signals, not patched.
+Persistent document storage is NOT yet credited: R8 next.
 
 
 System 3 original CPU entry was reached at 0x004C7390 and a real

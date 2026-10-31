@@ -288,6 +288,7 @@ void mc68ez328_device::internal_map(address_map &map)
 
 	map(0xfffff004, 0xfffff007).r(FUNC(mc68ez328_device::revision_r));
 	map(0xfffff402, 0xfffff402).rw(FUNC(mc68ez328_device::papuen_r), FUNC(mc68ez328_device::papuen_w));
+	map(0xfffff41e, 0xfffff41e).rw(FUNC(mc68ez328_device::pdkben_r), FUNC(mc68ez328_device::pdkben_w));
 
 	map(0xfffff110, 0xfffff111).rw(FUNC(mc68ez328_device::csa_r), FUNC(mc68ez328_device::csa_w));
 	map(0xfffff112, 0xfffff113).rw(FUNC(mc68ez328_device::csb_r), FUNC(mc68ez328_device::csb_w));
@@ -535,6 +536,7 @@ void mc68ez328_device::device_reset()
 	mc68328_base_device::device_reset();
 
 	m_papuen = 0xff;
+	m_pdkben = 0x00;
 	m_csa = 0x00e0;
 	m_csb = 0x0000;
 	m_csc = 0x0000;
@@ -719,6 +721,7 @@ void mc68ez328_device::register_state_save()
 
 	save_item(NAME(m_pasel));
 	save_item(NAME(m_papuen));
+	save_item(NAME(m_pdkben));
 	save_item(NAME(m_pwmp));
 	save_item(NAME(m_pwmcnt));
 	save_item(NAME(m_pwmfifo));
@@ -1576,6 +1579,39 @@ u8 mc68328_device::pasel_r() // 0x403
 {
 	LOGMASKED(LOG_GPIO_A, "%s: mc68328_r: PASEL: %02x\n", machine().describe_context(), m_pasel);
 	return m_pasel;
+}
+
+
+// The EZ PDKBEN register selects which active-low Port D inputs
+// participate in the single keyboard interrupt source at level 4.
+u8 mc68ez328_device::pdkben_r()
+{
+	return m_pdkben;
+}
+
+void mc68ez328_device::pdkben_w(u8 data)
+{
+	m_pdkben = data;
+	update_keyboard_irq();
+}
+
+void mc68ez328_device::update_keyboard_irq()
+{
+	// Row input signals remain idle-high even when PDKBEN is zero.
+	// Only externally low, enabled input rows assert EZ INT_KB.
+	u8 const active_rows = (~m_pdindata) & m_pdkben & ~m_pddir;
+	set_interrupt_line(INT_KB, active_rows != 0);
+}
+
+void mc68ez328_device::port_d_in_w(int state, int bit)
+{
+	u8 const bit_mask = 1U << bit;
+	u8 const next_state = (m_pdindata & ~bit_mask) | (state ? bit_mask : 0);
+	if (next_state == m_pdindata)
+		return;
+
+	m_pdindata = next_state;
+	update_keyboard_irq();
 }
 
 

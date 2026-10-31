@@ -154,3 +154,23 @@ R3 Phase1 regression, R5 LCD image equivalence, -validate and
 4/4 ROM audits PASS. Integrity warning, full Writer launch,
 PDSEL/PDKBEN IRQ behavior NOT credited. Complete detail in
 R6_AS3K_KEYBOARD_MATRIX_20261031.md, logs private.
+
+
+## R7 — Native AlphaWord Plus original launch and typing (2026-10-31)
+
+CLOSED / ORIGINAL_APPLET_DISCOVERY_PASS /
+ALPHAWORD_LAUNCH_PASS / EDITOR_TYPING_PASS.
+Native Flash header watchpoint at 00408000 produced FFFFFFFF
+on BOOT and C0FFEEAD on WRITER, actual CPU PC 004C3254.
+Original System3 integrity dialog Y -> native restart with
+Return -> original AlphaWord Plus 3.0 / System3.01 splash.
+Real PG4 battery input from original PowerModule.c resolves
+low-power warning without firmware modification. Exact CPU
+PDKBEN=FF write at 004CE98C was missing from EZ core;
+added masked row OR level4 interrupt, state/reset/save and
+MAME input-change notifications to awaken CPU from native STOP.
+Original editor now displays host-typed 'hello' on its KS0066 LCD.
+Minimal link/validate 0; four ROM audits OK; R3 Phase1 and R5
+no-key LCD regression PASS. No applet code patch or fork.
+Document persistence, PDSEL and peripherals NOT credited.
+See R7_ORIGINAL_ALPHAWORD_LAUNCH_TYPING_20261031.md.
