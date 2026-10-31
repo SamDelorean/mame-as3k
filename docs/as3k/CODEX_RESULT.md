@@ -174,3 +174,20 @@ Minimal link/validate 0; four ROM audits OK; R3 Phase1 and R5
 no-key LCD regression PASS. No applet code patch or fork.
 Document persistence, PDSEL and peripherals NOT credited.
 See R7_ORIGINAL_ALPHAWORD_LAUNCH_TYPING_20261031.md.
+
+
+## R8 — Battery-backed SRAM and original AlphaWord persistence (2026-10-31)
+
+CLOSED / CLEAN_EXIT_PERSISTENCE_PASS / EDITOR_RESTORE_PASS.
+One driver, standard MAME NVRAM bound to existing external 256 KiB
+RAM pointer. Original WRITER first process: Y, Return, editor,
+type r8proof, actual LCD display and normal exit -> 262144-byte
+private NVRAM image. Second NEW process, same ROM/NVRAM, NO input,
+recovered r8proof + cursor pixel-identically (240x36) and no
+initial data-change warning. BOOT also generated its own 256 KiB
+NVRAM via the same emulator. Minimal link PASS, MAME validate 0,
+4/4 ROM audits OK, R3 keyboard Phase1 D0=0 PASS.
+No firmware modification or user binaries in Git.
+Flash writing, crash recovery and exhaustive file operations
+NOT credited. R8_AS3K_BATTERY_SRAM_PERSISTENCE_20261031.md contains
+full private test evidence. R9 next; no push.

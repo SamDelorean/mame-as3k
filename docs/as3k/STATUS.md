@@ -76,6 +76,29 @@ under ../private/roms/as3k/mame_sets/r3_*.
 Next PLAN milestone R4: original System3 execution in the same
 AS3K-DIAG, with no firmware-specific shortcuts.
 
+## R8 — SRAM/document persistence (2026-10-31) — CLOSED / PASS
+
+The original external HY62U8200 256 KiB RAM device is now backed by
+native MAME NVRAM using its SAME memory pointer. Zero-filled initial
+state, actual CPU map, System3 and all user file structures unchanged.
+No ROM-version-specific logic.
+
+Real original WRITER first process: Y, Return, native editor, type
+r8proof, view its actual 240x36 KS0066 text, normal exit, create
+262144-byte SRAM image. Second INDEPENDENT emulator process, same
+ROM and private NVRAM path, NO key input, recovered r8proof with cursor.
+Two LCD screenshots matched pixel-for-pixel, and first-boot integrity
+warning did not recur. Original BOOT separately produced the same
+sized NVRAM from the SAME implementation.
+
+Minimal build/link PASS; -validate exit 0, four ROM audits 4/4 OK;
+R3 historical KeyboardInitialize Phase1 D0=0 regression PASS.
+The existing KS0066 F05 NEEDS REDUMP warning is unrelated.
+Only the canonical driver was modified. No crash-atomic write claim,
+full file operation audit, or Flash write/erase claim.
+See docs/as3k/R8_AS3K_BATTERY_SRAM_PERSISTENCE_20261031.md.
+Next original milestone R9, Flash write/SmartApplet fidelity.
+
 ## R7 — Original AlphaWord Plus discovery, launch, typing (2026-10-31) — CLOSED / FUNCTIONAL_PASS
 
 A real CPU read watchpoint at 00408000, PC=004C3254,
@@ -220,23 +243,16 @@ already accredited bridge, no redesign. AS3K-DIAG remains the only
 minimal emulator; private ROMs are data inputs, not product variants.
 
 ## Current execution frontier
-The original WRITER ROM now discovers and starts AlphaWord Plus
-3.0 / System 3.01; the native editor accepts MAME keyboard text
-and renders 'hello' on both KS0066 controllers. Earlier
-first-boot integrity and low-battery dialogs were traced to
-firmware behavior and real missing board signals, not patched.
-Persistent document storage is NOT yet credited: R8 next.
 
+The original WRITER ROM starts AlphaWord Plus and accepts real
+keyboard text. The complete battery-backed external SRAM now survives
+a normal emulator shutdown and a fresh MAME process. After typing
+r8proof the original editor recovered the SAME text and cursor without
+key input in the second run. Original Flash writing and SmartApplet
+updates are not yet validated; next R9.
 
-System 3 original CPU entry was reached at 0x004C7390 and a real
-initialization subroutine began at 0x004CD010 on BOOT and WRITER.
-This is separate from the following historical diagnostic result.
-
-The valid-AlphaWord diagnostic path has executed through **`KeyboardInitializeModule` Phase 1** and returned normally to its caller at `0x00420168` with `D0 = 0`.
-
-`KeyboardInitializeModulePhase2 = 0x0042E2F0` has **not** been executed.
-
-The MC68EZ328 keyboard-related GPIO audit and the first driver-only implementation stage are complete. The AS3K board's external 8-bit keyboard column latch at `0x00600000` is mapped, saved, deterministically reset, and validated through the existing Phase-1 path. The matrix, key mappings and Phase 2 remain deferred; the EZ core reset correction was completed in R4.
+Historical AlphaWord diagnostic Phase 1 remains PASS with D0=0.
+Other peripherals remain scoped to existing later milestones.
 
 ## Validated milestones
 
@@ -391,17 +407,15 @@ Keyboard Port-A core corrections closed in R3; future matrix and Port-D stages r
 
 ## Known gaps
 
-The emulator is not yet a complete usable AlphaSmart 3000. Remaining work includes PA/latch-to-PD matrix plumbing, PDSEL, later PDKBEN keyboard interrupt behavior, actual MAME input-port/key mapping, Phase 2 and later AlphaWord modules, dynamic chip-select/remapping fidelity, power/battery behavior, UART/RS-232, ADB, PS/2, IrDA, USB/PDIUSBD11D, Flash update/write behavior, measured LCD timing/colors, exact controller confirmation, and an explicit synthetic four-row visual fixture.
+The emulator is not yet a complete hardware-fidelity AlphaSmart 3000. R3-R8 accredited the matrix, keyboard interrupt, original dual LCD, applet launch, text entry and clean-exit SRAM persistence. Remaining work includes PDSEL mux fidelity, original Flash write/erase and SmartApplet updates, dynamic chip-select/remapping fidelity, power/battery timing beyond PG4, UART/RS-232, ADB, PS/2, IrDA, USB/PDIUSBD11D, complete document-management tests and measured LCD timing/colors.
 
 ## Next development step
 
-R3 Port-A PAPUEN/WDTH8 is closed by bounded CPU dynamic evidence.
-Continue with the existing R4 milestone: boot the original AS3000
-System3 on the SAME AS3K-DIAG executable, then reuse the LCD bridge.
-Only fix a demonstrated hardware-emulation blocker; no ROM-version-
-specific patches, isolated builds, keyboard Phase 2 or unrelated work.
-The validated historical latch, RAM, display, and startup paths remain
-unchanged. Maintain STATIC_FIRST -> minimal patch -> bounded validation.
+R8 battery-backed external SRAM and original AlphaWord text restoration
+on separate process launches: CLOSED / PASS. Continue established R9
+Flash write/erase and SmartApplet install fidelity, same single minimal
+AS3K-DIAG source/executable. Preserve all working ROM and R3-R8 paths;
+no isolated builds or speculative extensions.
 
 ## Reproducibility and contribution notes
 

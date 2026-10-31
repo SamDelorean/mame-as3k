@@ -42,6 +42,7 @@ Two version updaters known:
 #include "cpu/m68000/m68000.h"
 #include "machine/mc68328.h"
 #include "machine/ram.h"
+#include "machine/nvram.h"
 #include "video/hd44780.h"
 #include "emupal.h"
 #include "screen.h"
@@ -59,6 +60,7 @@ public:
 		, m_lcdc0(*this, "ks0066_0")
 		, m_lcdc1(*this, "ks0066_1")
 		, m_ram(*this, RAM_TAG)
+		, m_nvram(*this, "nvram")
 		, m_ipl(*this, "ipl")
 		, m_keys(*this, "COL%u", 0U)
 		, m_battery_status(*this, "BATTERY")
@@ -74,6 +76,7 @@ protected:
 	optional_device<ks0066_device> m_lcdc0;
 	optional_device<ks0066_device> m_lcdc1;
 	required_device<ram_device> m_ram;
+	required_device<nvram_device> m_nvram;
 	required_region_ptr<u16> m_ipl;
 	required_ioport_array<16> m_keys;
 	required_ioport m_battery_status;
@@ -118,6 +121,12 @@ void alphasmart3k_state::machine_start()
 {
 	address_space &space = m_maincpu->space(AS_PROGRAM);
 	space.install_ram(0x00000000, m_ram->size() - 1, m_ram->pointer());
+
+	// The 256 KiB HY62U8200 is backed up by the original AS3000's
+	// battery. Persist the exact external SRAM bytes, including the
+	// OS's own file allocation structures and document contents.
+	// No host-side translation of AlphaWord files is performed.
+	m_nvram->set_base(m_ram->pointer(), m_ram->size());
 
 	save_item(NAME(m_lcd_port_c_pending));
 	save_item(NAME(m_lcd_port_c_applied));
@@ -509,6 +518,7 @@ void alphasmart3k_state::alphasmart3k(machine_config &config)
 	PALETTE(config, "palette", FUNC(alphasmart3k_state::alphasmart3k_palette), 2);
 
 	RAM(config, RAM_TAG).set_default_size("256K");
+	NVRAM(config, "nvram", nvram_device::DEFAULT_ALL_0);
 
 	SOFTWARE_LIST(config, "kapps_list").set_original("alphasmart_kapps");
 }
