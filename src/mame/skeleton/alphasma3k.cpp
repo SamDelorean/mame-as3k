@@ -251,6 +251,17 @@ void alphasmart3k_state::alphasmart3k(machine_config &config)
 	// Basic machine hardware
 	MC68EZ328(config, m_maincpu, 16'000'000); // MC68EZ328PU16V, clock unverified
 	m_maincpu->set_addrmap(AS_PROGRAM, &alphasmart3k_state::main_map);
+	// Real AS3000 keyboard rows Y1-Y8 are held high by external pull-ups
+	// when idle, including when PDPUEN is disabled by the Small ROM.
+	// This is the undriven physical default, not a keyboard matrix model.
+	m_maincpu->in_port_d<0>().set_constant(1);
+	m_maincpu->in_port_d<1>().set_constant(1);
+	m_maincpu->in_port_d<2>().set_constant(1);
+	m_maincpu->in_port_d<3>().set_constant(1);
+	m_maincpu->in_port_d<4>().set_constant(1);
+	m_maincpu->in_port_d<5>().set_constant(1);
+	m_maincpu->in_port_d<6>().set_constant(1);
+	m_maincpu->in_port_d<7>().set_constant(1);
 	m_maincpu->out_port_c<0>().set(FUNC(alphasmart3k_state::lcd_db4_w));
 	m_maincpu->out_port_c<1>().set(FUNC(alphasmart3k_state::lcd_db5_w));
 	m_maincpu->out_port_c<2>().set(FUNC(alphasmart3k_state::lcd_db6_w));

@@ -1,6 +1,6 @@
 # AlphaSmart 3000 emulator — development status
 
-Last updated: 2026-10-28
+Last updated: 2026-10-31
 
 This document is the public handoff for AlphaSmart 3000 emulator development on branch `as3k-mame0289-dev` of `SamDelorean/mame-as3k`.
 
@@ -76,13 +76,57 @@ under ../private/roms/as3k/mame_sets/r3_*.
 Next PLAN milestone R4: original System3 execution in the same
 AS3K-DIAG, with no firmware-specific shortcuts.
 
+## R4 — System 3 original CPU execution (2026-10-31) — CLOSED / CPU_EXEC_PASS
+
+R4 is closed within its defined scope: true CPU entry into original System 3
+and execution of an original System 3 initialization subroutine. Not a
+claim of fully initialized GUI, AlphaWord launch, keyboard input or save.
+
+Two minimal hardware fixes in the SAME AS3K-DIAG tree:
+1. Board keyboard Port D rows Y1–Y8 are idle-high externally; before
+   the fix Small ROM active-low row scan found all eight pressed
+   (D1=0xff at 0x0040063A), blocking release polling. Eight
+   in_port_d GPIO callbacks now represent idle high. No keyboard
+   matrix, pressed events, IRQ or hardcoded firmware path was added.
+2. EZ-owned Timer 1 registers were not reset (different from the
+   original MC68328 registers). Small ROM wrote TCTL=0008, TCMP=0020,
+   TCTL=0009 and waited at 0x00400A66 for compare status. Diagnostic
+   logs identified uninitialized prescaler 0x7e99 and comparator
+   0xd6d8. MC68EZ328::device_reset now resets its own timer register
+   state: TCTL=0, TPRER=0, TCMP=ffff, TCR=0, TCN=0,
+   TSTAT=0, TCLEAR=0. Temporary logging was removed.
+
+Both OS3K_MIN_BOOT and OS3K_MIN_WRITER executed without ROM changes:
+Small ROM -> native version validation -> handoff at 0x004FFF98
+-> 0x004C007A -> System 3 entry 0x004C7390 -> initialization branch
+0x004C73CA -> genuine routine 0x004CD010. All stages independently
+observed under the same MAME debugger for both ROMs, with trace
+files in the existing private r4_* path. The debugger's displayed PC
+may show +2 relative to a breakpoint instruction address.
+The genuine firmware execution was NOT bypassed.
+
+Minimal MAME 0.289 build and link PASS (same alphasma3k executable).
+MAME -validate EXIT 0. ROM audits for asma3kdi, asma3kdv,
+asma3ksb, asma3ksw: 4/4 OK, EXIT 0; previously known KS0066
+F05 NEEDS REDUMP warning unchanged. Previous unmapped accesses at
+FFFFFD0C and FFFFFD0E remain unrelated and unaltered.
+
+R4 engineering handoff: docs/as3k/R4_SYSTEM3_BOOT_EXEC_20261031.md.
+Next planned increment R5: System 3 LCD user interface; reuse the
+already accredited bridge, no redesign. AS3K-DIAG remains the only
+minimal emulator; private ROMs are data inputs, not product variants.
+
 ## Current execution frontier
+
+System 3 original CPU entry was reached at 0x004C7390 and a real
+initialization subroutine began at 0x004CD010 on BOOT and WRITER.
+This is separate from the following historical diagnostic result.
 
 The valid-AlphaWord diagnostic path has executed through **`KeyboardInitializeModule` Phase 1** and returned normally to its caller at `0x00420168` with `D0 = 0`.
 
 `KeyboardInitializeModulePhase2 = 0x0042E2F0` has **not** been executed.
 
-The MC68EZ328 keyboard-related GPIO audit and the first driver-only implementation stage are complete. The AS3K board's external 8-bit keyboard column latch at `0x00600000` is mapped, saved, deterministically reset, and validated through the existing Phase-1 path. The matrix, key mappings, Phase 2, and CPU-core changes remain deferred.
+The MC68EZ328 keyboard-related GPIO audit and the first driver-only implementation stage are complete. The AS3K board's external 8-bit keyboard column latch at `0x00600000` is mapped, saved, deterministically reset, and validated through the existing Phase-1 path. The matrix, key mappings and Phase 2 remain deferred; the EZ core reset correction was completed in R4.
 
 ## Validated milestones
 

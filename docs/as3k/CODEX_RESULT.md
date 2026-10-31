@@ -118,3 +118,12 @@ Source-scoped git diff --check PASS. No temporary logging added to
 C++ source; debugger script and logs remain in private. No firmware
 or generated executables staged or published. Git commit hash and
 push disposition recorded separately in the final status.
+
+
+## R4 — Real System 3 CPU entry (2026-10-31)
+CLOSED / CPU_EXEC_PASS, not GUI/Writer full boot. Same reduced AS3K-DIAG:
+fixed idle-high Port D board row callbacks and reset of EZ-owned timer
+register state. Both original BOOT and WRITER ROMs reached System3
+0x004C7390, continued 0x004C73CA, and invoked 0x004CD010.
+Build PASS, -validate PASS, four ROM audits PASS. Temporary timer
+tracing removed. See R4_SYSTEM3_BOOT_EXEC_20261031.md. R5 next.

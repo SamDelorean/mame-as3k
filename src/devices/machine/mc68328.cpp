@@ -550,6 +550,15 @@ void mc68ez328_device::device_reset()
 	m_pwmfifo_cnt = 0;
 	m_pwm_rep_cnt = 1;
 
+	// The EZ timer is separate from the original MC68328's two timers.
+	// Its registers must receive their own reset defaults before use.
+	m_timer_regs.tctl = 0x0000;
+	m_timer_regs.tprer = 0x0000;
+	m_timer_regs.tcmp = 0xffff;
+	m_timer_regs.tcr = 0x0000;
+	m_timer_regs.tcn = 0x0000;
+	m_timer_regs.tstat = 0x0000;
+	m_timer_regs.tclear = 0;
 	m_gptimer->adjust(attotime::never);
 
 	m_lrra = 0xff;
