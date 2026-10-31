@@ -76,6 +76,41 @@ under ../private/roms/as3k/mame_sets/r3_*.
 Next PLAN milestone R4: original System3 execution in the same
 AS3K-DIAG, with no firmware-specific shortcuts.
 
+## R5 — Genuine System 3 LCD (2026-10-31) — CLOSED / DISPLAY_PASS
+
+The existing Port C -> two KS0066 bridge and 40x4 (240x36)
+renderer are now dynamically validated **against original
+System 3 OS3K 2005 firmware in both BOOT and WRITER Flash images**.
+
+Using the already linked reduced AS3K-DIAG executable, program-space
+watchpoints recorded 8,308 PCDATA writes at 0xFFFFF411 for each
+ROM (note 0xFFFFF409 is PB data, *not* the LCD port).
+E1 had 1,492 rising strobes and E2 had 1,270; with RS=1,
+402 were E1 data strobes and 370 E2 data strobes.
+
+The real MAME LCD snapshots for BOOT/WRITER are visually and
+pixel-for-pixel identical: 240x36, 387 active pixels on
+the first row at the sampled moment. The genuine firmware displays
+"An unexpected data change occurred." The identical string is
+present in the original System3 Flash at offset 0x598D.
+This is a genuine firmware warning and is NOT a fake MAME message.
+
+Following display the CPU waits in original key-scan
+0x004D0FD8; actual pressed keys are not yet wired.
+The underlying reason for the data-change warning is unproven,
+and no persistence or keyboard implementation is counted as PASS.
+The LCD is nevertheless confirmed operational with original
+OS output, including both controller enables. Existing KS0066
+CGROM F05 retains its NEEDS REDUMP warning.
+
+Both CPU runs exit correctly at a bounded debugger breakpoint,
+MAME -validate passed, and 4/4 ROM audits passed. No
+driver/core source changes or rebuild were needed in R5.
+Full source evidence: docs/as3k/R5_SYSTEM3_LCD_DUAL_KS0066_20261031.md.
+All scripts, logs and PNG captures are preserved in private.
+Next previously planned milestone: R6 native keyboard matrix/input,
+to replace fixed idle states (without any new emulator line).
+
 ## R4 — System 3 original CPU execution (2026-10-31) — CLOSED / CPU_EXEC_PASS
 
 R4 is closed within its defined scope: true CPU entry into original System 3
@@ -117,6 +152,11 @@ already accredited bridge, no redesign. AS3K-DIAG remains the only
 minimal emulator; private ROMs are data inputs, not product variants.
 
 ## Current execution frontier
+On genuine System 3 BOOT and WRITER, the LCD has displayed the
+original data-change warning using both KS0066 controllers; the
+CPU is now observed waiting for actual physical keyboard input at
+0x004D0FD8. This is the current functional UI frontier after R5.
+
 
 System 3 original CPU entry was reached at 0x004C7390 and a real
 initialization subroutine began at 0x004CD010 on BOOT and WRITER.

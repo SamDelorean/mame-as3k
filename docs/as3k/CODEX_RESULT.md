@@ -127,3 +127,16 @@ register state. Both original BOOT and WRITER ROMs reached System3
 0x004C7390, continued 0x004C73CA, and invoked 0x004CD010.
 Build PASS, -validate PASS, four ROM audits PASS. Temporary timer
 tracing removed. See R4_SYSTEM3_BOOT_EXEC_20261031.md. R5 next.
+
+
+## R5 — Genuine System3 LCD output (2026-10-31)
+CLOSED / DISPLAY_PASS; no code changes, no Codex. Both BOOT and
+WRITER original firmware images, in the ONE reduced AS3K-DIAG,
+issued 8308 writes to real PCDATA 0xFFFFF411, with
+1492 E1 strobes, 1270 E2 strobes (RS=1: 402 and 370).
+Actual 240x36 screenshots match pixel-for-pixel and display the
+original OS warning 'An unexpected data change occurred.'
+The CPU awaits real key input at 0x004D0FD8. Key mapping, Writer
+launch and memory integrity are NOT claimed PASS. -validate PASS,
+4/4 ROM audit PASS, known CGROM F05 warning. No source edits.
+See R5_SYSTEM3_LCD_DUAL_KS0066_20261031.md and private R5 logs.
