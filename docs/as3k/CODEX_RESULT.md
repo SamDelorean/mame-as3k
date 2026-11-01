@@ -227,3 +227,40 @@ USB/serial transfer protocol remain NOT credited.
 Report: R9_INTEL_FLASH_SMARTAPPLET_20261031.md.
 Private test logs, manufacturer applet and programmed RAM/Flash
 are outside Git. No Codex or push. Next R10 external I/O.
+
+## R10 — MC68EZ328 UART bitstream / RS-232 loopback (2026-10-31)
+
+STATE: R10 OPEN; basic UART 8N1 TX/RX + 8-byte FIFO **DYNAMIC PASS**.
+Original UartModule.c / DebugModule.c and MC68EZ328UM chapter 11
+used as reference. Previous core UART data handlers were nonfunctional.
+Now the SAME minimal AS3K-DIAG has baud-timed TXD, sampled RXD,
+RX/TX FIFOs, register statuses, and EZ UART interrupt source
+logic, wired to real MAME RS232 loopback/null_modem/pty slots
+instead of an artificial text-copy shortcut.
+
+Dynamic original WRITER CPU-space register test:
+UBAUD 0226, USTCNT E000, UTX FFFFF907=A5 -> URX=20A5;
+UTX=5A -> URX=205A. Timer/bit pipeline traversed real
+RS232 loopback; both bytes recovered. Separate 8-byte burst
+10:32:54:76:98:BA:DC:FE recovered in order, RX FIFO
+empty=0000 after eight reads. Both tests exit code 0.
+Minimal MAME build and link exit 0 (one system driver source,
+six registered ROM entries); -validate exit 0; ROM audits
+4/4 OK; historic R3 Phase1 D0=0; original R8 and R9
+persisted AlphaWord document screenshots pixel-identical.
+Existing F05 NEEDS REDUMP untouched.
+
+Parities, 7-bit/2-stop modes, RTS/CTS, verified serial IRQ
+semantics, unverified 16-MHz oscillator vs actual baud,
+USB, IrDA, BBUG execution, native firmware RS232Framer,
+full file transfer and official updater remain NOT PASSED.
+External host PTY bidirectional communication is independently
+PASS: a separate Python process opened /dev/pts/1, read byte
+A5 from MAME TXD, sent byte 5A, and MAME URX returned 205A.
+Host script logged R10_PTY_BIDIRECTIONAL_PASS=True,
+MAME exit 0. Initial time alignment error corrected in
+TEST SCRIPT without modifying UART hardware model.
+R10 is not CLOSED. See
+docs/as3k/R10_EZ_UART_RS232_LOOPBACK_20261031.md.
+Native original source audit: R10_ORIGINAL_DEV_TOOLS_AUDIT_20261031.md.
+All scripts/logs and images are private in T160; no Codex.

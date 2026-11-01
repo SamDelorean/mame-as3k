@@ -76,6 +76,41 @@ under ../private/roms/as3k/mame_sets/r3_*.
 Next PLAN milestone R4: original System3 execution in the same
 AS3K-DIAG, with no firmware-specific shortcuts.
 
+## R10 — Herramientas originales y comunicaciones (2026-10-31) — EN CURSO / UART 8N1 PASS
+
+Se examinaron las fuentes originales de Drive: DebugModule.c/h,
+As_sim.c, WinSim, UsbAsmModule.s, UsbChip.c, UsbToAS.c,
+UsbGet.h, UpdaterCommands.h, UpdaterInfo.h, RS232Framer.h,
+UartModule.c y utilidades de IrDA. Los contratos originales
+permiten definir vectores de prueba para UART/BBUG, D11/D12,
+Get Utility, updater, serie, IrDA y Send/Print.
+
+El módulo Debug del firmware NO contiene el depurador externo
+SDS/SingleStep del PC; WinSim es una aplicación Win32, no MAME.
+Estas fuentes serán oráculos y pruebas, sin sustituir emulación
+de CPU o crear otros ejecutables. Detalle completo:
+docs/as3k/R10_ORIGINAL_DEV_TOOLS_AUDIT_20261031.md.
+
+El núcleo MC68EZ328 y el único AS3K-DIAG ya tienen UART con
+transmisión/recepción física de bits, temporizadores y FIFOs de 8
+bytes, conectado a MAME RS-232 (loopback, null_modem, pty).
+Prueba dinámica original WRITER: TX A5 -> URX 20A5; TX 5A ->
+URX 205A. Otro ensayo de 8 bytes [10,32,54,76,98,BA,DC,FE]
+retornó EXACTAMENTE en ese orden y vació URX a 0000.
+Prueba adicional entre DOS procesos en T160 con MAME `-rs232 pty`:
+la máquina original envió A5, leído por el anfitrión externo en
+/dev/pts/1; el anfitrión envió 5A y CPU MAME leyó URX=205A.
+R10_PTY_BIDIRECTIONAL_PASS=True, salida 0. Esta prueba acredita
+un puerto hacia proceso anfitrión, no protocolos File/Updater.
+Compilación y enlace reducidos PASS; MAME validate PASS;
+auditoría de cuatro ROM 4/4 PASS; diagnóstico R3 D0=0 PASS;
+LCD de documentos persistentes R8 y R9 idéntico a referencias.
+Reporte: docs/as3k/R10_EZ_UART_RS232_LOOPBACK_20261031.md.
+Estos son PASSES del transporte UART básico 8N1, NO del
+protocolo completo de firmware, USB D11/D12, IRDA, BBUG,
+RS232Framer/Updater ni Send/Print. R10 permanece ABIERTO.
+Mismo AS3K-DIAG y mismo flujo minimalista.
+
 ## R9 — Intel 28F008B3 Flash / SmartApplet installation (2026-10-31) — CLOSED / PASS
 
 The ONE AS3K-DIAG MAME reduced executable now models the physical

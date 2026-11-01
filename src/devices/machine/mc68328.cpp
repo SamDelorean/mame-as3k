@@ -68,6 +68,7 @@ mc68328_base_device::mc68328_base_device(const machine_config &mconfig, device_t
 	, m_in_port_g_cb(*this, 0)
 	, m_out_pwm_cb(*this)
 	, m_out_spim_cb(*this)
+	, m_out_uart_txd_cb(*this)
 	, m_in_spim_cb(*this, 0)
 	, m_out_flm_cb(*this)
 	, m_out_llp_cb(*this)
@@ -344,6 +345,8 @@ void mc68328_base_device::device_start()
 	m_pwm = timer_alloc(FUNC(mc68328_base_device::pwm_tick), this);
 	m_rtc = timer_alloc(FUNC(mc68328_base_device::rtc_tick), this);
 	m_spim = timer_alloc(FUNC(mc68328_base_device::spim_tick), this);
+	m_uart_tx_timer = timer_alloc(FUNC(mc68328_base_device::uart_tx_tick), this);
+	m_uart_rx_timer = timer_alloc(FUNC(mc68328_base_device::uart_rx_tick), this);
 	m_lcd_scan = timer_alloc(FUNC(mc68328_base_device::lcd_scan_tick), this);
 
 	m_lcd_line_buffer = std::make_unique<u16[]>(1024 / 16); // 1024px wide, up to 16 pixels per word
@@ -437,6 +440,15 @@ void mc68328_base_device::device_reset()
 	m_urx = 0x0000;
 	m_utx = 0x0000;
 	m_umisc = 0x0000;
+	m_uart_tx_head = m_uart_tx_tail = m_uart_tx_count = 0;
+	m_uart_rx_head = m_uart_rx_tail = m_uart_rx_count = 0;
+	m_uart_tx_frame = 0;
+	m_uart_tx_bits_left = m_uart_rx_phase = m_uart_rx_data = 0;
+	m_uart_tx_active = false;
+	m_uart_rx_level = true;
+	m_uart_tx_timer->adjust(attotime::never);
+	m_uart_rx_timer->adjust(attotime::never);
+	m_out_uart_txd_cb(1);
 
 	m_lssa = 0x00000000;
 	m_lssa_end = 0x00000000;
@@ -632,6 +644,20 @@ void mc68328_base_device::register_state_save()
 	save_item(NAME(m_urx));
 	save_item(NAME(m_utx));
 	save_item(NAME(m_umisc));
+	save_item(NAME(m_uart_tx_fifo));
+	save_item(NAME(m_uart_rx_fifo));
+	save_item(NAME(m_uart_tx_head));
+	save_item(NAME(m_uart_tx_tail));
+	save_item(NAME(m_uart_tx_count));
+	save_item(NAME(m_uart_rx_head));
+	save_item(NAME(m_uart_rx_tail));
+	save_item(NAME(m_uart_rx_count));
+	save_item(NAME(m_uart_tx_frame));
+	save_item(NAME(m_uart_tx_bits_left));
+	save_item(NAME(m_uart_rx_phase));
+	save_item(NAME(m_uart_rx_data));
+	save_item(NAME(m_uart_rx_level));
+	save_item(NAME(m_uart_tx_active));
 
 	save_item(NAME(m_lssa));
 	save_item(NAME(m_lssa_end));
@@ -3062,65 +3088,199 @@ u16 mc68328_base_device::spimcont_r() // 0x802
 
 
 //-------------------------------------------------
-//  UART hardware
+//  UART hardware — EZ 8N1 bit-level transport and 8-byte FIFOs.
+//  Older MC68328 behavior is left unchanged, pending its own validation.
 //-------------------------------------------------
 
-void mc68328_base_device::ustcnt_w(u16 data) // 0x900
+attotime mc68328_base_device::uart_bit_time() const
 {
-	LOGMASKED(LOG_UART, "%s: ustcnt_w: USTCNT = %04x\n", machine().describe_context(), data);
-	m_ustcnt = data;
+	// MC68EZ328UM chapter 11: SYSCLK/[16*(65-PRESCALER)*2^DIVIDER].
+	// The AS3000 board clock is currently configured as 16 MHz.
+	u32 const prescaler = 65 - (m_ubaud & 0x3f);
+	u32 const divider = 1U << ((m_ubaud >> 8) & 7);
+	u32 const baud = std::max(1U, u32(clock()) / (16 * prescaler * divider));
+	return attotime::from_hz(baud);
 }
 
-u16 mc68328_base_device::ustcnt_r() // 0x900
+void mc68328_base_device::uart_update_irq()
 {
-	LOGMASKED(LOG_UART, "%s: ustcnt_r: USTCNT: %04x\n", machine().describe_context(), m_ustcnt);
+	if (type() != MC68EZ328)
+		return;
+	bool const enabled = bool(m_ustcnt & USTCNT_UART_EN);
+	bool const tx_irq = (m_ustcnt & USTCNT_TX_EMPTY_EN) && !m_uart_tx_active && !m_uart_tx_count;
+	bool const rx_irq = (m_ustcnt & USTCNT_RX_RDY_EN) && m_uart_rx_count;
+	set_interrupt_line(INT_UART, enabled && (tx_irq || rx_irq));
+}
+
+void mc68328_base_device::uart_start_tx()
+{
+	if (m_uart_tx_active || !m_uart_tx_count || !(m_ustcnt & USTCNT_UART_EN) || !(m_ustcnt & USTCNT_TX_EN))
+		return;
+	u8 const data = m_uart_tx_fifo[m_uart_tx_head];
+	m_uart_tx_head = (m_uart_tx_head + 1) & 7;
+	--m_uart_tx_count;
+	// First bit start=0, then 8 bits LSB first, finally stop=1.
+	m_uart_tx_frame = (u16(data) << 1) | 0x200;
+	m_uart_tx_bits_left = 10;
+	m_uart_tx_active = true;
+	m_out_uart_txd_cb(m_uart_tx_frame & 1);
+	m_uart_tx_frame >>= 1;
+	--m_uart_tx_bits_left;
+	m_uart_tx_timer->adjust(uart_bit_time());
+	uart_update_irq();
+}
+
+TIMER_CALLBACK_MEMBER(mc68328_base_device::uart_tx_tick)
+{
+	if (!m_uart_tx_active)
+		return;
+	if (m_uart_tx_bits_left)
+	{
+		m_out_uart_txd_cb(m_uart_tx_frame & 1);
+		m_uart_tx_frame >>= 1;
+		--m_uart_tx_bits_left;
+		m_uart_tx_timer->adjust(uart_bit_time());
+	}
+	else
+	{
+		m_uart_tx_active = false;
+		m_out_uart_txd_cb(1);
+		uart_start_tx();
+		uart_update_irq();
+	}
+}
+
+void mc68328_base_device::uart_rxd_w(int state)
+{
+	if (type() != MC68EZ328)
+		return;
+	bool const next = bool(state);
+	if (m_uart_rx_level && !next && !m_uart_rx_phase &&
+		(m_ustcnt & (USTCNT_UART_EN | USTCNT_RX_EN)) == (USTCNT_UART_EN | USTCNT_RX_EN))
+	{
+		m_uart_rx_phase = 1;
+		m_uart_rx_data = 0;
+		// The first sample is in the middle of data bit 0.
+		m_uart_rx_timer->adjust(uart_bit_time() + uart_bit_time() / 2);
+	}
+	m_uart_rx_level = next;
+}
+
+TIMER_CALLBACK_MEMBER(mc68328_base_device::uart_rx_tick)
+{
+	if (m_uart_rx_phase >= 1 && m_uart_rx_phase <= 8)
+	{
+		if (m_uart_rx_level)
+			m_uart_rx_data |= 1 << (m_uart_rx_phase - 1);
+		++m_uart_rx_phase;
+		m_uart_rx_timer->adjust(uart_bit_time());
+	}
+	else if (m_uart_rx_phase == 9)
+	{
+		if (m_uart_rx_level && m_uart_rx_count < 8)
+		{
+			m_uart_rx_fifo[m_uart_rx_tail] = m_uart_rx_data;
+			m_uart_rx_tail = (m_uart_rx_tail + 1) & 7;
+			++m_uart_rx_count;
+		}
+		else if (!m_uart_rx_level)
+		{
+			m_urx |= URX_FRAME_ERROR;
+		}
+		else
+		{
+			m_urx |= URX_OVRUN;
+		}
+		m_uart_rx_phase = 0;
+		uart_update_irq();
+	}
+}
+
+void mc68328_base_device::ustcnt_w(u16 data)
+{
+	m_ustcnt = data;
+	if (type() == MC68EZ328)
+	{
+		uart_start_tx();
+		uart_update_irq();
+	}
+}
+
+u16 mc68328_base_device::ustcnt_r()
+{
 	return m_ustcnt;
 }
 
-void mc68328_base_device::ubaud_w(u16 data) // 0x902
+void mc68328_base_device::ubaud_w(u16 data)
 {
-	LOGMASKED(LOG_UART, "%s: ubaud_w: UBAUD = %04x\n", machine().describe_context(), data);
 	m_ubaud = data;
 }
 
-u16 mc68328_base_device::ubaud_r() // 0x902
+u16 mc68328_base_device::ubaud_r()
 {
-	LOGMASKED(LOG_UART, "%s: ubaud_r: UBAUD: %04x\n", machine().describe_context(), m_ubaud);
 	return m_ubaud;
 }
 
-void mc68328_base_device::urx_w(u16 data) // 0x904
+void mc68328_base_device::urx_w(u16 data)
 {
-	LOGMASKED(LOG_UART, "%s: urx_w: URX = %04x (Not Yet Implemented)\n", machine().describe_context(), data);
+	// Read-only receiver register.
 }
 
-u16 mc68328_base_device::urx_r() // 0x904
+u16 mc68328_base_device::urx_r(offs_t offset, u16 mem_mask)
 {
-	LOGMASKED(LOG_UART, "%s: urx_r: URX: %04x\n", machine().describe_context(), m_urx);
-	return m_urx;
+	if (type() != MC68EZ328)
+		return m_urx;
+	u16 result = m_urx;
+	if (m_uart_rx_count)
+	{
+		result = (result & ~0xff) | m_uart_rx_fifo[m_uart_rx_head];
+		result |= URX_DATA_READY;
+		if (m_uart_rx_count >= 4) result |= URX_FIFO_HALF;
+		if (m_uart_rx_count == 8) result |= URX_FIFO_FULL;
+		if (ACCESSING_BITS_0_7)
+		{
+			m_uart_rx_head = (m_uart_rx_head + 1) & 7;
+			--m_uart_rx_count;
+			m_urx &= ~(URX_FRAME_ERROR | URX_OVRUN);
+			uart_update_irq();
+		}
+	}
+	return result;
 }
 
-void mc68328_base_device::utx_w(u16 data) // 0x906
+void mc68328_base_device::utx_w(offs_t offset, u16 data, u16 mem_mask)
 {
-	LOGMASKED(LOG_UART, "%s: utx_w: UTX = %04x (Not Yet Implemented)\n", machine().describe_context(), data);
+	if (type() != MC68EZ328)
+		return;
+	if (ACCESSING_BITS_0_7 && m_uart_tx_count < 8)
+	{
+		m_uart_tx_fifo[m_uart_tx_tail] = data & 0xff;
+		m_uart_tx_tail = (m_uart_tx_tail + 1) & 7;
+		++m_uart_tx_count;
+		m_utx = data & 0xff;
+		uart_start_tx();
+		uart_update_irq();
+	}
 }
 
-u16 mc68328_base_device::utx_r() // 0x906
+u16 mc68328_base_device::utx_r()
 {
-	u16 data = m_utx | UTX_FIFO_EMPTY | UTX_FIFO_HALF | UTX_TX_AVAIL;
-	LOGMASKED(LOG_UART, "%s: utx_r: UTX: %04x\n", machine().describe_context(), data);
-	return data;
+	if (type() != MC68EZ328)
+		return m_utx | UTX_FIFO_EMPTY | UTX_FIFO_HALF | UTX_TX_AVAIL;
+	u16 result = m_utx;
+	if (m_uart_tx_count < 8) result |= UTX_TX_AVAIL;
+	if (m_uart_tx_count <= 4) result |= UTX_FIFO_HALF;
+	if (!m_uart_tx_count && !m_uart_tx_active) result |= UTX_FIFO_EMPTY;
+	return result;
 }
 
-void mc68328_base_device::umisc_w(u16 data) // 0x908
+void mc68328_base_device::umisc_w(u16 data)
 {
-	LOGMASKED(LOG_UART, "%s: umisc_w: UMISC = %04x (Not Yet Implemented)\n", machine().describe_context(), data);
 	m_umisc = data;
 }
 
-u16 mc68328_base_device::umisc_r() // 0x908
+u16 mc68328_base_device::umisc_r()
 {
-	LOGMASKED(LOG_UART, "%s: umisc_r: UMISC: %04x\n", machine().describe_context(), m_umisc);
 	return m_umisc;
 }
 

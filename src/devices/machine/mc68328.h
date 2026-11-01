@@ -113,6 +113,9 @@ public:
 	void port_d_in_w(int state, int bit);
 
 	auto out_spim() { return m_out_spim_cb.bind(); }
+	// EZ UART bit stream for the original AS3000 serial interface.
+	auto out_uart_txd() { return m_out_uart_txd_cb.bind(); }
+	void uart_rxd_w(int state);
 	auto in_spim() { return m_in_spim_cb.bind(); }
 
 	auto out_pwm() { return m_out_pwm_cb.bind(); }
@@ -486,7 +489,7 @@ protected:
 	void ustcnt_w(u16 data);
 	void ubaud_w(u16 data);
 	void urx_w(u16 data);
-	void utx_w(u16 data);
+	void utx_w(offs_t offset, u16 data, u16 mem_mask = ~0);
 	void umisc_w(u16 data);
 
 	void lssa_msw_w(offs_t offset, u16 data, u16 mem_mask);
@@ -576,7 +579,7 @@ protected:
 
 	u16 ustcnt_r();
 	u16 ubaud_r();
-	u16 urx_r();
+	u16 urx_r(offs_t offset, u16 mem_mask = ~0);
 	u16 utx_r();
 	u16 umisc_r();
 
@@ -693,6 +696,16 @@ protected:
 	u16  m_urx;         // UART RX Register
 	u16  m_utx;         // UART TX Register
 	u16  m_umisc;       // UART Misc Register
+	std::array<u8, 8> m_uart_tx_fifo{};
+	std::array<u8, 8> m_uart_rx_fifo{};
+	u8 m_uart_tx_head = 0, m_uart_tx_tail = 0, m_uart_tx_count = 0;
+	u8 m_uart_rx_head = 0, m_uart_rx_tail = 0, m_uart_rx_count = 0;
+	u16 m_uart_tx_frame = 0;
+	u8 m_uart_tx_bits_left = 0;
+	u8 m_uart_rx_phase = 0;
+	u8 m_uart_rx_data = 0;
+	bool m_uart_rx_level = true;
+	bool m_uart_tx_active = false;
 
 	// $(FF)FFFA00
 	u32  m_lssa;        // Screen Starting Address Register
@@ -753,6 +766,11 @@ protected:
 	TIMER_CALLBACK_MEMBER(rtc_tick);
 	TIMER_CALLBACK_MEMBER(spim_tick);
 	TIMER_CALLBACK_MEMBER(lcd_scan_tick);
+	TIMER_CALLBACK_MEMBER(uart_tx_tick);
+	TIMER_CALLBACK_MEMBER(uart_rx_tick);
+	attotime uart_bit_time() const;
+	void uart_update_irq();
+	void uart_start_tx();
 	void fill_lcd_dma_buffer();
 
 	virtual bool rtc_int_is_active() = 0;
@@ -764,6 +782,8 @@ protected:
 	emu_timer *m_pwm;
 	emu_timer *m_rtc;
 	emu_timer *m_spim;
+	emu_timer *m_uart_tx_timer;
+	emu_timer *m_uart_rx_timer;
 
 	emu_timer *m_lcd_scan;
 	bool m_lcd_first_line;
@@ -792,6 +812,7 @@ protected:
 	devcb_write_line m_out_pwm_cb;
 
 	devcb_write_line m_out_spim_cb;
+	devcb_write_line m_out_uart_txd_cb;
 	devcb_read_line  m_in_spim_cb;
 
 	devcb_write_line m_out_flm_cb;

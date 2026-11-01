@@ -44,6 +44,10 @@ Two version updaters known:
 #include "machine/ram.h"
 #include "machine/nvram.h"
 #include "machine/intelfsh.h"
+#include "bus/rs232/rs232.h"
+#include "bus/rs232/loopback.h"
+#include "bus/rs232/null_modem.h"
+#include "bus/rs232/pty.h"
 #include "video/hd44780.h"
 #include "emupal.h"
 #include "screen.h"
@@ -51,6 +55,15 @@ Two version updaters known:
 
 namespace
 {
+
+// Keep the reduced AS3K build genuinely minimal: avoid the many CPUs
+// and terminal boards pulled in by default_rs232_devices.
+void as3k_rs232_devices(device_slot_interface &device)
+{
+	device.option_add("loopback", RS232_LOOPBACK);
+	device.option_add("null_modem", NULL_MODEM);
+	device.option_add("pty", PSEUDO_TERMINAL);
+}
 
 class alphasmart3k_state : public driver_device
 {
@@ -489,6 +502,10 @@ void alphasmart3k_state::alphasmart3k(machine_config &config)
 	// Basic machine hardware
 	MC68EZ328(config, m_maincpu, 16'000'000); // MC68EZ328PU16V, clock unverified
 	m_maincpu->set_addrmap(AS_PROGRAM, &alphasmart3k_state::main_map);
+	// Native EZ UART bit stream, not an injected character/file service.
+	m_maincpu->out_uart_txd().set("rs232", FUNC(rs232_port_device::write_txd));
+	rs232_port_device &rs232(RS232_PORT(config, "rs232", as3k_rs232_devices, nullptr));
+	rs232.rxd_handler().set(m_maincpu, FUNC(mc68ez328_device::uart_rxd_w));
 	// Full physical X1-X15 / Y1-Y8 matrix; idle rows remain pulled high.
 	m_maincpu->out_port_a<0>().set(FUNC(alphasmart3k_state::pa_column_w<0>));
 	m_maincpu->out_port_a<1>().set(FUNC(alphasmart3k_state::pa_column_w<1>));
