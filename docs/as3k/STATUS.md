@@ -76,6 +76,41 @@ under ../private/roms/as3k/mame_sets/r3_*.
 Next PLAN milestone R4: original System3 execution in the same
 AS3K-DIAG, with no firmware-specific shortcuts.
 
+## R10 — Integración física original (2026-11-01) — ABIERTO / UART + D11 GPIO, FIFO y RESET PASS
+
+Se completaron en el MISMO AS3K-DIAG los búferes internos de
+PDIUSBD11D para los 10 índices de endpoint (8 bytes de
+datos + 2 de encabezado por índice), y las operaciones CPU
+Select Endpoint, F0 Write/Read Buffer, FA Validate Buffer,
+F2 Clear Buffer para OUT y el registro STALL 40–49.
+Se conectaron RESET_N a PF2, INT_N en reposo a PF1/IRQ5,
+y SUSPEND a PE0 sin host USB. Se corrigió el callback EZ
+de PFDIR para la señal RESET_N, y se conserva inicialización
+del hub compatible D0 del código original del AS3000.
+**No existe activación falsa de host USB ni interrupciones
+sin paquetes.** Ningún código de ROM o programa anfitrión
+fue introducido en el modelo de hardware.
+
+Prueba por pines/registros físicos CPU, BOOT y WRITER:
+`R10_D11_FIFO_PASS=1`, selección vacío 00,
+validar lleno 01, contenido 00:03:A1:B2:C3 exacto,
+STALL 80, liberación 00, PF1 INT_N=02 y
+reset físico PF2 devuelve 00; ambas ROMs con salida 0.
+Prueba adicional de capacidad completa:
+`R10_D11_FIFO8_PASS=1`, encabezado 00:08 y
+último byte 88, salida 0.
+Compilación MAME reducido y enlace exit0; `-validate`
+exit0, cuatro ROMs 4/4 OK. Se conservaron UART 8
+bytes PASS, R3 D0=0 y documentos persistentes R8/R9
+con capturas LCD idénticas píxel a píxel.
+
+**R10 sigue abierto exclusivamente para la fidelidad de
+hardware faltante**: enlace USB D+/D-, SIE, tokens/
+handshakes USB y sus interrupciones reales. No se
+desarrollaron impresoras, utilidades ni emuladores aparte.
+Expediente técnico ampliado:
+`docs/as3k/R10_PDIUSBD11_I2C_HW_20261101.md`.
+
 ## R10 — Comunicaciones e integración física (2026-11-01) — ABIERTO / UART + D11 I²C PASS
 
 Se integró en el ÚNICO driver `alphasma3k.cpp` la interfaz

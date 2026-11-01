@@ -108,8 +108,15 @@ protected:
 	u8 m_usb_state = 0, m_usb_bits = 0, m_usb_shift = 0;
 	u8 m_usb_route = 0, m_usb_command = 0, m_usb_ack = 0;
 	u8 m_usb_read_index = 0, m_usb_tx_data = 0;
-	u8 m_usb_addr = 0, m_usb_ep_enable = 0, m_usb_mode = 0;
+	u8 m_usb_addr = 0, m_usb_hub_addr = 0, m_usb_ep_enable = 0, m_usb_mode = 0;
 	u8 m_usb_clkdiv = 0, m_usb_write_index = 0, m_usb_master_ack = 0;
+	// PDIUSBD11: ten logical endpoint indices, each eight USB data
+	// bytes plus the reserved/length I2C buffer header.
+	std::array<u8, 100> m_usb_ep_fifo{};
+	std::array<u8, 10> m_usb_ep_full{};
+	std::array<u8, 10> m_usb_ep_stall{};
+	u8 m_usb_selected_ep = 0;
+	bool m_usb_reset_n = true, m_usb_int_n = true;
 
 	virtual void machine_start() override ATTR_COLD;
 	virtual void machine_reset() override ATTR_COLD;
@@ -129,6 +136,13 @@ private:
 	int usb_scl_r() { return m_usb_master_scl; }
 	void usb_receive_byte(u8 data);
 	void usb_prepare_tx();
+	void usb_chip_reset();
+	void usb_command_w(u8 data);
+	u8 usb_command_read();
+	void usb_irq_update();
+	void usb_reset_n_w(int state);
+	int usb_int_n_r() { return m_usb_int_n; }
+	int usb_suspend_r() { return 0; } // no host, no suspend event
 	template <unsigned Pin> void usb_port_e_w(int state) { usb_pe_line_w(Pin, state); }
 	int battery_good_r() { return BIT(m_battery_status->read(), 4); }
 	template <unsigned Bit> void pa_column_w(int state) { keyboard_port_a_w(Bit, state); }
@@ -177,11 +191,18 @@ void alphasmart3k_state::machine_start()
 	save_item(NAME(m_usb_read_index));
 	save_item(NAME(m_usb_tx_data));
 	save_item(NAME(m_usb_addr));
+	save_item(NAME(m_usb_hub_addr));
 	save_item(NAME(m_usb_ep_enable));
 	save_item(NAME(m_usb_mode));
 	save_item(NAME(m_usb_clkdiv));
 	save_item(NAME(m_usb_write_index));
 	save_item(NAME(m_usb_master_ack));
+	save_item(NAME(m_usb_ep_fifo));
+	save_item(NAME(m_usb_ep_full));
+	save_item(NAME(m_usb_ep_stall));
+	save_item(NAME(m_usb_selected_ep));
+	save_item(NAME(m_usb_reset_n));
+	save_item(NAME(m_usb_int_n));
 }
 
 void alphasmart3k_state::machine_reset()
@@ -200,8 +221,10 @@ void alphasmart3k_state::machine_reset()
 	m_usb_state = m_usb_bits = m_usb_shift = 0;
 	m_usb_route = m_usb_command = m_usb_ack = 0;
 	m_usb_read_index = m_usb_tx_data = 0;
-	m_usb_addr = m_usb_ep_enable = m_usb_mode = m_usb_clkdiv = 0;
+	m_usb_addr = m_usb_hub_addr = m_usb_ep_enable = m_usb_mode = m_usb_clkdiv = 0;
 	m_usb_write_index = m_usb_master_ack = 0;
+	m_usb_reset_n = true;
+	usb_chip_reset();
 	refresh_keyboard_lines();
 }
 
@@ -258,6 +281,85 @@ INPUT_CHANGED_MEMBER(alphasmart3k_state::keyboard_key_changed)
 // The original AlphaSmart UsbAsmModule.s toggles PEDIR rather than
 // the latched low value in PEDATA. No USB packets are invented:
 // without a USB host, the controller has no endpoint transactions.
+void alphasmart3k_state::usb_irq_update()
+{
+	// D11 INT_N is open-drain active low on EZ IRQ5/PF1.
+	// Without a connected USB host there can be no SIE transactions
+	// to assert the interrupt source. Programming/validating an IN
+	// FIFO is NOT an interrupt until the host consumes it.
+	m_usb_int_n = true;
+	m_maincpu->irq5_w(0);
+}
+
+void alphasmart3k_state::usb_chip_reset()
+{
+	m_usb_addr = m_usb_hub_addr = m_usb_ep_enable = m_usb_mode = m_usb_clkdiv = 0;
+	m_usb_selected_ep = 0;
+	m_usb_ep_fifo.fill(0);
+	m_usb_ep_full.fill(0);
+	m_usb_ep_stall.fill(0);
+	m_usb_route = m_usb_command = m_usb_ack = 0;
+	m_usb_write_index = m_usb_read_index = m_usb_master_ack = 0;
+	m_usb_tx_data = m_usb_bits = m_usb_shift = 0;
+	m_usb_state = 0;
+	m_usb_slave_sda_low = false;
+	usb_irq_update();
+}
+
+void alphasmart3k_state::usb_reset_n_w(int state)
+{
+	bool const next = bool(state);
+	if (m_usb_reset_n && !next)
+		usb_chip_reset(); // hardware RESET_N, not simulated USB bus reset
+	m_usb_reset_n = next;
+}
+
+void alphasmart3k_state::usb_command_w(u8 command)
+{
+	m_usb_command = command;
+	m_usb_read_index = m_usb_write_index = 0;
+	if (command <= 9)
+		m_usb_selected_ep = command;
+	else if (command == 0xf2)
+	{
+		// Clear Buffer: consumed OUT packet, freeing its FIFO.
+		// This is harmless without host traffic, and is distinct
+		// from a USB receive interrupt.
+		if (m_usb_selected_ep == 2 || m_usb_selected_ep == 5 ||
+			m_usb_selected_ep == 6 || m_usb_selected_ep == 8)
+			m_usb_ep_full[m_usb_selected_ep] = 0;
+	}
+	else if (command == 0xfa)
+	{
+		// Validate Buffer: expose prepared IN data to a USB host.
+		// Actual delivery will be possible after SIE implementation.
+		if (m_usb_selected_ep == 3 || m_usb_selected_ep == 4 ||
+			m_usb_selected_ep == 7 || m_usb_selected_ep == 9)
+			m_usb_ep_full[m_usb_selected_ep] = 1;
+	}
+}
+
+u8 alphasmart3k_state::usb_command_read()
+{
+	u8 const ep = m_usb_selected_ep;
+	if (m_usb_command == 0xf4 || m_usb_command == 0xf5)
+		return 0; // no host => no interrupt or SOF/frame number
+	if (m_usb_command <= 9)
+		return m_usb_ep_full[ep] ? 1 : 0; // Select Endpoint
+	if (m_usb_command >= 0x80 && m_usb_command <= 0x89)
+		return (m_usb_ep_stall[m_usb_command & 0x0f] ? 0x80 : 0) |
+			(m_usb_ep_full[m_usb_command & 0x0f] ? 1 : 0);
+	if (m_usb_command >= 0x40 && m_usb_command <= 0x49)
+		return 0; // no USB host transaction to report
+	if (m_usb_command == 0xf0)
+	{
+		u8 const byte = m_usb_read_index < 10
+			? m_usb_ep_fifo[ep * 10 + m_usb_read_index] : 0;
+		return byte;
+	}
+	return 0;
+}
+
 void alphasmart3k_state::usb_receive_byte(u8 data)
 {
 	if (!m_usb_route)
@@ -269,22 +371,36 @@ void alphasmart3k_state::usb_receive_byte(u8 data)
 	}
 	else if (m_usb_route == 0x36)
 	{
-		// Command transaction; command controls the following data
-		// phase, as in original UsbChip.c USB_SetMode / USB_ReadISR.
-		m_usb_command = data;
+		// Every byte on command address is independently a command.
+		usb_command_w(data);
 		m_usb_ack = 1;
 	}
 	else if (m_usb_route == 0x34)
 	{
+		u8 const ep = m_usb_selected_ep;
 		switch (m_usb_command)
 		{
-		case 0xd1: m_usb_addr = data; break;          // Set USB address/enable
-		case 0xd8: m_usb_ep_enable = data; break;     // Endpoint enable
+		case 0xd0: m_usb_hub_addr = data; break; // D11 compatibility hub-disable at init
+		case 0xd1: m_usb_addr = data; break;
+		case 0xd8: m_usb_ep_enable = data; break;
 		case 0xf3:
 			if (m_usb_write_index == 0) m_usb_mode = data;
 			else if (m_usb_write_index == 1) m_usb_clkdiv = data;
 			break;
-		default: break;  // Other commands require real host buffers.
+		case 0xf0: // host writes USB IN buffer via I2C
+			if (m_usb_write_index < 10)
+				m_usb_ep_fifo[ep * 10 + m_usb_write_index] = data;
+			break;
+		default:
+			// Same 0x40..0x49 commands are used for *write* of
+			// endpoint stall status, unlike read last status.
+			if (m_usb_command >= 0x40 && m_usb_command <= 0x49)
+			{
+				u8 const i = m_usb_command - 0x40;
+				m_usb_ep_stall[i] = BIT(data, 0);
+				m_usb_ep_full[i] = 0; // endpoint reset on status write
+			}
+			break;
 		}
 		++m_usb_write_index;
 		m_usb_ack = 1;
@@ -293,10 +409,7 @@ void alphasmart3k_state::usb_receive_byte(u8 data)
 
 void alphasmart3k_state::usb_prepare_tx()
 {
-	// The original system can read interrupt status even with no host
-	// attached. Real USB enumeration / endpoints are not yet modeled.
-	// In an unconnected state, no interrupt bits or packet bytes exist.
-	m_usb_tx_data = 0;
+	m_usb_tx_data = usb_command_read();
 	++m_usb_read_index;
 	m_usb_bits = 0;
 	m_usb_slave_sda_low = !BIT(m_usb_tx_data, 7);
@@ -715,6 +828,11 @@ void alphasmart3k_state::alphasmart3k(machine_config &config)
 	m_maincpu->out_port_e<2>().set(FUNC(alphasmart3k_state::usb_port_e_w<2>));
 	m_maincpu->in_port_e<1>().set(FUNC(alphasmart3k_state::usb_sda_r));
 	m_maincpu->in_port_e<2>().set(FUNC(alphasmart3k_state::usb_scl_r));
+	// USB suspend PE0; INT_N is EZ IRQ5 / PF1; RESET_N is PF2.
+	// Hardware-source UsbModule.c sets PF2 high to release reset.
+	m_maincpu->in_port_e<0>().set(FUNC(alphasmart3k_state::usb_suspend_r));
+	m_maincpu->in_port_f<1>().set(FUNC(alphasmart3k_state::usb_int_n_r));
+	m_maincpu->out_port_f<2>().set(FUNC(alphasmart3k_state::usb_reset_n_w));
 	m_maincpu->out_port_c<0>().set(FUNC(alphasmart3k_state::lcd_db4_w));
 	m_maincpu->out_port_c<1>().set(FUNC(alphasmart3k_state::lcd_db5_w));
 	m_maincpu->out_port_c<2>().set(FUNC(alphasmart3k_state::lcd_db6_w));

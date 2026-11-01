@@ -304,3 +304,41 @@ transfer, AlphaSmart Manager install or printer USB.
 All those remain OPEN under existing R10.
 See R10_PDIUSBD11_I2C_HW_20261101.md and
 T160 private r10_d11_* logs / scripted register tests.
+
+## R10 — D11 original endpoint FIFOs + PF2 reset / PF1 IRQ wiring (2026-11-01)
+
+R10 still OPEN. Continuation of the SAME AS3K-DIAG hardware
+source: no new emulator, application, host utility or ROM patch.
+Extended the existing Philips PDIUSBD11D I2C controller in
+alphasma3k.cpp with ten endpoint-index buffers (reserved +
+length + eight bytes each), Select Endpoint 00–09, F0
+Write/Read Buffer, FA Validate Buffer for IN, F2 Clear
+Buffer for OUT, 40–49 Set Endpoint Status and 80–89
+Read Endpoint Status; STALL handling and manufacturer
+D0 hub-compatible initialization. Reused original
+UsbModule.c, UsbChip.c and Philips D11 specification.
+Hardware RESET_N is on EZ PF2; fixed direction callback
+in EZ core mc68328.cpp to propagate the actual PF2 output
+level. D11 INT_N idle level on PF1 feeds IRQ5;
+SUSPEND output is on PE0, no bus suspend in no-host state.
+No fake USB packet, endpoint interrupt or host device.
+
+Original ROM BOOT and original ROM WRITER CPU-space I2C
+bitbang tests each returned R10_D11_FIFO_PASS=1:
+empty select 00 -> validated full 01, content
+00:03:A1:B2:C3 exact, stalled status 80,
+unstalled 00, INT_N idle PF1 bit 02, physical
+RESET_N PF2 pulse cleared buffer; exit0.
+Second capacity test: 00:08 header and eight original
+byte values 11:22:33:44:55:66:77:88,
+R10_D11_FIFO8_PASS=1, exit0.
+
+Reduced MAME same ./alphasma3k build/link exit0,
+-validate exit0, four ROMs OK; UART eight-byte
+loopback PASS, R3 KeyboardInitialize D0=0 PASS,
+original R8/R9 persistent LCD images pixel-identical.
+Chip-end CPU-control PASS is NOT bus-level USB D+/D-,
+SIE SETUP/OUT/IN token exchange, real interrupt events,
+host USB connectivity or transfer-protocol PASS.
+Evidence appended to R10_PDIUSBD11_I2C_HW_20261101.md,
+logs/scripts only in private/roms/as3k/mame_sets.

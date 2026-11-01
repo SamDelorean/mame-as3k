@@ -2004,7 +2004,14 @@ u8 mc68328_base_device::pesel_r() // 0x423
 void mc68328_base_device::pfdir_w(u8 data) // 0x428
 {
 	LOGMASKED(LOG_GPIO_F, "%s: pfdir_w: PFDIR = %02x\n", machine().describe_context(), data);
+	u8 const old = m_pfdir;
 	m_pfdir = data;
+	// EZ USB RESET_N on PF2 becomes actively driven at the
+	// direction transition, after the firmware sets PFDATA.
+	if (type() == MC68EZ328)
+		for (int bit = 0; bit < 8; ++bit)
+			if (BIT(old ^ data, bit) && BIT(m_pfsel & m_pfdir, bit))
+				m_out_port_f_cb[bit](BIT(m_pfdata, bit));
 }
 
 u8 mc68328_base_device::pfdir_r() // 0x428
