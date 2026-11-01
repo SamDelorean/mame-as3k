@@ -108,7 +108,7 @@ protected:
 	u8 m_usb_state = 0, m_usb_bits = 0, m_usb_shift = 0;
 	u8 m_usb_route = 0, m_usb_command = 0, m_usb_ack = 0;
 	u8 m_usb_read_index = 0, m_usb_tx_data = 0;
-	u8 m_usb_addr = 0, m_usb_hub_addr = 0, m_usb_ep_enable = 0, m_usb_mode = 0;
+	u8 m_usb_addr = 0, m_usb_ep_enable = 0, m_usb_mode = 0;
 	u8 m_usb_clkdiv = 0, m_usb_write_index = 0, m_usb_master_ack = 0;
 	// PDIUSBD11: ten logical endpoint indices, each eight USB data
 	// bytes plus the reserved/length I2C buffer header.
@@ -116,6 +116,9 @@ protected:
 	std::array<u8, 10> m_usb_ep_full{};
 	std::array<u8, 10> m_usb_ep_stall{};
 	u8 m_usb_selected_ep = 0;
+	u8 m_usb_ep_ptr = 0; // D11 buffer pointer: reset ONLY by Select Endpoint
+	std::array<u8, 10> m_usb_last_status{}; // last actual USB transaction, if any
+	u16 m_usb_pending_irq = 0; // D11 endpoint+bus reset interrupt register
 	bool m_usb_reset_n = true, m_usb_int_n = true;
 
 	virtual void machine_start() override ATTR_COLD;
@@ -191,7 +194,6 @@ void alphasmart3k_state::machine_start()
 	save_item(NAME(m_usb_read_index));
 	save_item(NAME(m_usb_tx_data));
 	save_item(NAME(m_usb_addr));
-	save_item(NAME(m_usb_hub_addr));
 	save_item(NAME(m_usb_ep_enable));
 	save_item(NAME(m_usb_mode));
 	save_item(NAME(m_usb_clkdiv));
@@ -201,6 +203,9 @@ void alphasmart3k_state::machine_start()
 	save_item(NAME(m_usb_ep_full));
 	save_item(NAME(m_usb_ep_stall));
 	save_item(NAME(m_usb_selected_ep));
+	save_item(NAME(m_usb_ep_ptr));
+	save_item(NAME(m_usb_last_status));
+	save_item(NAME(m_usb_pending_irq));
 	save_item(NAME(m_usb_reset_n));
 	save_item(NAME(m_usb_int_n));
 }
@@ -221,7 +226,7 @@ void alphasmart3k_state::machine_reset()
 	m_usb_state = m_usb_bits = m_usb_shift = 0;
 	m_usb_route = m_usb_command = m_usb_ack = 0;
 	m_usb_read_index = m_usb_tx_data = 0;
-	m_usb_addr = m_usb_hub_addr = m_usb_ep_enable = m_usb_mode = m_usb_clkdiv = 0;
+	m_usb_addr = m_usb_ep_enable = m_usb_mode = m_usb_clkdiv = 0;
 	m_usb_write_index = m_usb_master_ack = 0;
 	m_usb_reset_n = true;
 	usb_chip_reset();
@@ -287,14 +292,16 @@ void alphasmart3k_state::usb_irq_update()
 	// Without a connected USB host there can be no SIE transactions
 	// to assert the interrupt source. Programming/validating an IN
 	// FIFO is NOT an interrupt until the host consumes it.
-	m_usb_int_n = true;
-	m_maincpu->irq5_w(0);
+	m_usb_int_n = !m_usb_pending_irq;
+	m_maincpu->irq5_w(!m_usb_int_n);
 }
 
 void alphasmart3k_state::usb_chip_reset()
 {
-	m_usb_addr = m_usb_hub_addr = m_usb_ep_enable = m_usb_mode = m_usb_clkdiv = 0;
-	m_usb_selected_ep = 0;
+	m_usb_addr = m_usb_ep_enable = m_usb_mode = m_usb_clkdiv = 0;
+	m_usb_selected_ep = m_usb_ep_ptr = 0;
+	m_usb_last_status.fill(0);
+	m_usb_pending_irq = 0;
 	m_usb_ep_fifo.fill(0);
 	m_usb_ep_full.fill(0);
 	m_usb_ep_stall.fill(0);
@@ -319,7 +326,10 @@ void alphasmart3k_state::usb_command_w(u8 command)
 	m_usb_command = command;
 	m_usb_read_index = m_usb_write_index = 0;
 	if (command <= 9)
+	{
 		m_usb_selected_ep = command;
+		m_usb_ep_ptr = 0;  // Select Endpoint repositions the on-chip RAM pointer
+	}
 	else if (command == 0xf2)
 	{
 		// Clear Buffer: consumed OUT packet, freeing its FIFO.
@@ -342,20 +352,46 @@ void alphasmart3k_state::usb_command_w(u8 command)
 u8 alphasmart3k_state::usb_command_read()
 {
 	u8 const ep = m_usb_selected_ep;
-	if (m_usb_command == 0xf4 || m_usb_command == 0xf5)
-		return 0; // no host => no interrupt or SOF/frame number
+	if (m_usb_command == 0xf4)
+	{
+		u8 const result = m_usb_read_index == 0
+			? (m_usb_pending_irq & 0xff) : (m_usb_pending_irq >> 8);
+		if (m_usb_read_index == 1)
+		{
+			// The high byte bus-reset flag is cleared by the F4 read;
+			// endpoint IRQ bits are cleared by Last Transaction Status.
+			m_usb_pending_irq &= ~0x4000;
+			usb_irq_update();
+		}
+		return result;
+	}
+	if (m_usb_command == 0xf5)
+		return 0; // no received SOF without a USB host
 	if (m_usb_command <= 9)
 		return m_usb_ep_full[ep] ? 1 : 0; // Select Endpoint
 	if (m_usb_command >= 0x80 && m_usb_command <= 0x89)
-		return (m_usb_ep_stall[m_usb_command & 0x0f] ? 0x80 : 0) |
-			(m_usb_ep_full[m_usb_command & 0x0f] ? 1 : 0);
+	{
+		u8 const index = m_usb_command & 0x0f;
+		// Philips PDIUSBD11: BUFFER FULL is bit 5, STALL bit 3.
+		return (m_usb_ep_full[index] ? 0x20 : 0) |
+			(m_usb_ep_stall[index] ? 0x08 : 0);
+	}
 	if (m_usb_command >= 0x40 && m_usb_command <= 0x49)
-		return 0; // no USB host transaction to report
+	{
+		u8 const index = m_usb_command & 0x0f;
+		u8 const status = m_usb_last_status[index];
+		m_usb_last_status[index] = 0;
+		// Endpoint 2..7 => IRQ first byte bits 0..5;
+		// endpoint 8..9 => IRQ second byte bits 0..1.
+		if (index >= 2)
+			m_usb_pending_irq &= ~(1U << (index - 2));
+		usb_irq_update();
+		return status;
+	}
 	if (m_usb_command == 0xf0)
 	{
-		u8 const byte = m_usb_read_index < 10
-			? m_usb_ep_fifo[ep * 10 + m_usb_read_index] : 0;
-		return byte;
+		return m_usb_ep_ptr < 10
+			? m_usb_ep_fifo[ep * 10 + m_usb_ep_ptr++] : 0;
 	}
 	return 0;
 }
@@ -380,7 +416,6 @@ void alphasmart3k_state::usb_receive_byte(u8 data)
 		u8 const ep = m_usb_selected_ep;
 		switch (m_usb_command)
 		{
-		case 0xd0: m_usb_hub_addr = data; break; // D11 compatibility hub-disable at init
 		case 0xd1: m_usb_addr = data; break;
 		case 0xd8: m_usb_ep_enable = data; break;
 		case 0xf3:
@@ -388,8 +423,8 @@ void alphasmart3k_state::usb_receive_byte(u8 data)
 			else if (m_usb_write_index == 1) m_usb_clkdiv = data;
 			break;
 		case 0xf0: // host writes USB IN buffer via I2C
-			if (m_usb_write_index < 10)
-				m_usb_ep_fifo[ep * 10 + m_usb_write_index] = data;
+			if (m_usb_ep_ptr < 10)
+				m_usb_ep_fifo[ep * 10 + m_usb_ep_ptr++] = data;
 			break;
 		default:
 			// Same 0x40..0x49 commands are used for *write* of
@@ -398,6 +433,7 @@ void alphasmart3k_state::usb_receive_byte(u8 data)
 			{
 				u8 const i = m_usb_command - 0x40;
 				m_usb_ep_stall[i] = BIT(data, 0);
+				m_usb_ep_ptr = 0;
 				m_usb_ep_full[i] = 0; // endpoint reset on status write
 			}
 			break;

@@ -76,7 +76,31 @@ under ../private/roms/as3k/mame_sets/r3_*.
 Next PLAN milestone R4: original System3 execution in the same
 AS3K-DIAG, with no firmware-specific shortcuts.
 
-## R10 — Integración física original (2026-11-01) — ABIERTO / UART + D11 GPIO, FIFO y RESET PASS
+## R10 — Integración física original (2026-11-01) — ABIERTO / UART + D11 GPIO, FIFO, RESET y REGISTROS FIELES PASS
+
+**Corrección de fidelidad según Philips PDIUSBD11:** el chip tiene ocho
+endpoints funcionales, con índices 2–9; los índices 0–1 no se
+acreditan como endpoints físicos propios. Read Endpoint Status
+informa BUFFER FULL en bit 5 (0x20) y STALL en bit 3 (0x08),
+no 0x01 / 0x80 como se había documentado en pruebas anteriores.
+Select Endpoint retorna lleno mediante bit 0 y reinicia el puntero
+interno RAM; F0 Read/Write Buffer conserva el puntero entre
+varias transacciones I²C hasta otra selección. Read Last Transaction
+Status mantiene estado/IRQ separado del estado de endpoint.
+Se retiró la interpretación D0 como registro de hub: corresponde
+a PDIUSBH11, no al periférico integrado PDIUSBD11.
+
+La versión corregida compiló y enlazó en el ÚNICO ejecutable,
+y las ROM originales BOOT y WRITER pasaron R10_D11_SPEC_PASS=1,
+con escritura y lectura de FIFO fragmentadas, STATUS=0x20,
+STALL=0x08, RESET_N PF2 y INT_N PF1 inactivo.
+MAME validate PASS, cuatro auditorías ROM PASS,
+UART ocho bytes PASS, R3 teclado D0=0,
+y persistencia R8/R9 con LCD idéntico píxel por píxel.
+Esta verificación reemplaza los valores de estado incorrectos
+consignados históricamente más abajo; NO declara SIE/USB
+D+/D− ni transferencia por anfitrión funcionales.
+
 
 Se completaron en el MISMO AS3K-DIAG los búferes internos de
 PDIUSBD11D para los 10 índices de endpoint (8 bytes de

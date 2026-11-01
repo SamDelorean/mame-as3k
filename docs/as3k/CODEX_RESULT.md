@@ -342,3 +342,35 @@ SIE SETUP/OUT/IN token exchange, real interrupt events,
 host USB connectivity or transfer-protocol PASS.
 Evidence appended to R10_PDIUSBD11_I2C_HW_20261101.md,
 logs/scripts only in private/roms/as3k/mame_sets.
+
+## R10 — Philips PDIUSBD11 hardware fidelity correction (2026-11-01)
+
+R10 OPEN. Manufacturer original UsbChip.c and Philips D11
+datasheet reconciled against SAME AS3K-DIAG hardware model.
+Replaced incorrect full/status masks (Read Endpoint Status
+full=0x20 and STALL=0x08; Select Endpoint still full=0x01).
+Made F0 buffer read/write preserve its D11 SRAM pointer
+across separate I²C data phases, reset pointer only on
+Select Endpoint. Read Last Transaction Status now
+independent of endpoint buffer and clears endpoint IRQ
+pending bit, if any; F4 reads two IRQ bytes and clears
+bus-reset flag. Removed nonexistent PDIUSBD11 hub D0
+registration. Eight actual endpoints are indexed 2–9;
+array storage includes 0–1 compatibility/reserved indices,
+not ten independent physical endpoints.
+
+Two ORIGINAL ROMs BOOT/WRITER ran GPIO real bit-bang
+R10_D11_SPEC_PASS=1 and emulator exit0 without Lua error:
+fragmented 5-byte buffer writing/reading exact, endpoint
+select FULL=01, status FULL=20, STALL=08, CLEAR=00,
+idle INT_N PF1=02, physical RESET_N PF2 clears buffer.
+Same reduced MAME link PASS; validate exit0, four ROM
+audits 4/4 OK, UART eight-byte FIFO PASS,
+R3 keyboard D0=0 PASS, R8/R9 original document LCD
+pixels identical to baseline. Older logs with FULL status
+01 and STALL 80 are superseded as NON-conformant.
+
+No USB D+/D- packet SIE, host enumeration, synthetic printer,
+other emulators or programs were added. R10 remains OPEN.
+See R10_PDIUSBD11_I2C_HW_20261101.md and private
+r10_d11_spec_* / r10_spec_* T160 evidence.
