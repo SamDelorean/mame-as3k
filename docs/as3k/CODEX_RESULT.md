@@ -264,3 +264,43 @@ R10 is not CLOSED. See
 docs/as3k/R10_EZ_UART_RS232_LOOPBACK_20261031.md.
 Native original source audit: R10_ORIGINAL_DEV_TOOLS_AUDIT_20261031.md.
 All scripts/logs and images are private in T160; no Codex.
+
+## R10 — PDIUSBD11D I²C port hardware, no USB-host protocol (2026-11-01)
+
+R10 GENERAL OPEN. D11 I2C GPIO_BUS_PASS / ACK_PASS /
+COMMAND_DATA_PASS / 4_ROM_REGRESSION_PASS.
+
+Reused original AlphaSmart sources from Drive:
+UsbAsmModule.s, UsbModule.c, UsbChip.c/.h and Philips D11
+datasheet. The actual AS3000 drives PE1=SDA and PE2=SCL
+by toggling PEDIR while latching PEDATA low. Previously
+EZ callbacks were driven only by PEDATA writes. Corrected
+EZ-only effective open-drain line output on PEDIR,
+PEDATA and PESEL changes, with external low-level sample
+on released input. Older MC68328 behavior unaffected.
+
+The SAME minimal alphasma3k.cpp driver now contains a
+board-level PDIUSBD11D I2C slave model: START/STOP,
+8-bit MSB-first transfer, SDA drive for ACK, master
+ACK/NACK and basic D11 command/data addresses 34/35/36.
+Limited D1 address / D8 endpoint enable / F3 mode
+configuration and F4 empty interrupt read. No USB
+host traffic or invented endpoint packet.
+
+Real emulated CPU GPIO bit-bang (not direct slave
+field access), BOOT and WRITER: released PE1/PE2=06,
+36 ACK, F4 ACK, data-read 35 ACK, ISR 0000,
+invalid address 30 NACK. WRITER full D1/80 and
+F3/11/0B command/data exchange PASS. Build/link
+same reduced binary exit0, -validate exit0, four ROM
+audits 4/4 OK. UART 8-byte FIFO unchanged PASS,
+R3 KeyboardInitialize Phase1 D0=0 PASS, original
+R8 `r8proof` and R9 `flash` persisted LCD images
+pixel-identical after running this build.
+
+This is a physical PDIUSBD11D CPU-control-path PASS,
+NOT USB enumeration, host GET packets, endpoint FIFO
+transfer, AlphaSmart Manager install or printer USB.
+All those remain OPEN under existing R10.
+See R10_PDIUSBD11_I2C_HW_20261101.md and
+T160 private r10_d11_* logs / scripted register tests.

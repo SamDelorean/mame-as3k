@@ -76,6 +76,35 @@ under ../private/roms/as3k/mame_sets/r3_*.
 Next PLAN milestone R4: original System3 execution in the same
 AS3K-DIAG, with no firmware-specific shortcuts.
 
+## R10 — Comunicaciones e integración física (2026-11-01) — ABIERTO / UART + D11 I²C PASS
+
+Se integró en el ÚNICO driver `alphasma3k.cpp` la interfaz
+I²C física del PDIUSBD11D en PE1 (SDA) y PE2 (SCL).
+A diferencia de antes, el núcleo EZ `mc68328.cpp`
+propaga las transiciones de `PEDIR`/`PESEL`, tal
+como exige el código real fabricante `UsbAsmModule.s`,
+en el que ambas líneas son drenador abierto y PEDATA
+permanece bajo. Se implementaron start/stop, lectura/escritura
+de bits y bytes, ACK/NACK y direcciones D11 34/35/36,
+así como comandos limitados D1, F3, D8 y lectura F4 sin
+interrupciones falsas cuando no hay anfitrión USB.
+
+PRUEBAS DINÁMICAS originales BOOT y WRITER: GPIO de
+ambas líneas liberadas=06; comando 36+F4 ACK,
+lectura 35 ACK e ISR 0000, dirección inválida 30 NACK;
+ambas ROMs exit0. En WRITER: D1+80 y F3+11/0B con
+ACKs correctos, R10_D11_INIT PASS=1. Mismo MAME
+minimalista build/link PASS; validate PASS; 4/4
+auditorías ROM PASS. UART FIFO de 8 bytes intacto,
+KeyboardInitialize R3 D0=0 y documentos AlphaWord
+de R8/R9 con imágenes LCD pixel-idénticas.
+
+Reporte exacto: `docs/as3k/R10_PDIUSBD11_I2C_HW_20261101.md`.
+**R10 NO está cerrado**: no hay USB host virtual
+enumerado, USB endpoints útiles, transferencia por
+AlphaSmart Manager ni salida de impresión USB/PDF.
+Se mantienen el proyecto único y los trabajos R3–R9.
+
 ## R10 — Herramientas originales y comunicaciones (2026-10-31) — EN CURSO / UART 8N1 PASS
 
 Se examinaron las fuentes originales de Drive: DebugModule.c/h,

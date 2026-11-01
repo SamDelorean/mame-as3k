@@ -101,6 +101,15 @@ protected:
 	u8 m_lcd_port_c_applied = 0;
 	u8 m_keyboard_column_latch = 0xff;
 	u8 m_keyboard_port_a_columns = 0x7f;
+	// PDIUSBD11D I2C control bus. SDA=PE1 and SCL=PE2,
+	// as driven by PEDIR in the original UsbAsmModule.s.
+	bool m_usb_master_sda = true, m_usb_master_scl = true;
+	bool m_usb_slave_sda_low = false;
+	u8 m_usb_state = 0, m_usb_bits = 0, m_usb_shift = 0;
+	u8 m_usb_route = 0, m_usb_command = 0, m_usb_ack = 0;
+	u8 m_usb_read_index = 0, m_usb_tx_data = 0;
+	u8 m_usb_addr = 0, m_usb_ep_enable = 0, m_usb_mode = 0;
+	u8 m_usb_clkdiv = 0, m_usb_write_index = 0, m_usb_master_ack = 0;
 
 	virtual void machine_start() override ATTR_COLD;
 	virtual void machine_reset() override ATTR_COLD;
@@ -115,6 +124,12 @@ private:
 	void keyboard_port_a_w(unsigned bit, int state);
 	int keyboard_row_r(unsigned row);
 	void refresh_keyboard_lines();
+	void usb_pe_line_w(unsigned pin, int state);
+	int usb_sda_r() { return m_usb_master_sda && !m_usb_slave_sda_low; }
+	int usb_scl_r() { return m_usb_master_scl; }
+	void usb_receive_byte(u8 data);
+	void usb_prepare_tx();
+	template <unsigned Pin> void usb_port_e_w(int state) { usb_pe_line_w(Pin, state); }
 	int battery_good_r() { return BIT(m_battery_status->read(), 4); }
 	template <unsigned Bit> void pa_column_w(int state) { keyboard_port_a_w(Bit, state); }
 	template <unsigned Bit> int pd_row_r() { return keyboard_row_r(Bit); }
@@ -150,6 +165,23 @@ void alphasmart3k_state::machine_start()
 	save_item(NAME(m_lcd_port_c_applied));
 	save_item(NAME(m_keyboard_column_latch));
 	save_item(NAME(m_keyboard_port_a_columns));
+	save_item(NAME(m_usb_master_sda));
+	save_item(NAME(m_usb_master_scl));
+	save_item(NAME(m_usb_slave_sda_low));
+	save_item(NAME(m_usb_state));
+	save_item(NAME(m_usb_bits));
+	save_item(NAME(m_usb_shift));
+	save_item(NAME(m_usb_route));
+	save_item(NAME(m_usb_command));
+	save_item(NAME(m_usb_ack));
+	save_item(NAME(m_usb_read_index));
+	save_item(NAME(m_usb_tx_data));
+	save_item(NAME(m_usb_addr));
+	save_item(NAME(m_usb_ep_enable));
+	save_item(NAME(m_usb_mode));
+	save_item(NAME(m_usb_clkdiv));
+	save_item(NAME(m_usb_write_index));
+	save_item(NAME(m_usb_master_ack));
 }
 
 void alphasmart3k_state::machine_reset()
@@ -163,6 +195,13 @@ void alphasmart3k_state::machine_reset()
 	// The hardware power-on state is unknown; default to no active-low columns.
 	m_keyboard_column_latch = 0xff;
 	m_keyboard_port_a_columns = 0x7f;
+	m_usb_master_sda = m_usb_master_scl = true;
+	m_usb_slave_sda_low = false;
+	m_usb_state = m_usb_bits = m_usb_shift = 0;
+	m_usb_route = m_usb_command = m_usb_ack = 0;
+	m_usb_read_index = m_usb_tx_data = 0;
+	m_usb_addr = m_usb_ep_enable = m_usb_mode = m_usb_clkdiv = 0;
+	m_usb_write_index = m_usb_master_ack = 0;
 	refresh_keyboard_lines();
 }
 
@@ -212,6 +251,151 @@ void alphasmart3k_state::refresh_keyboard_lines()
 INPUT_CHANGED_MEMBER(alphasmart3k_state::keyboard_key_changed)
 {
 	refresh_keyboard_lines();
+}
+
+// PDIUSBD11D: I2C serial interface at command address 0x36,
+// data-write 0x34 and data-read 0x35 (Philips original datasheet).
+// The original AlphaSmart UsbAsmModule.s toggles PEDIR rather than
+// the latched low value in PEDATA. No USB packets are invented:
+// without a USB host, the controller has no endpoint transactions.
+void alphasmart3k_state::usb_receive_byte(u8 data)
+{
+	if (!m_usb_route)
+	{
+		m_usb_route = data;
+		m_usb_ack = (data == 0x36 || data == 0x34 || data == 0x35);
+		m_usb_read_index = 0;
+		m_usb_write_index = 0;
+	}
+	else if (m_usb_route == 0x36)
+	{
+		// Command transaction; command controls the following data
+		// phase, as in original UsbChip.c USB_SetMode / USB_ReadISR.
+		m_usb_command = data;
+		m_usb_ack = 1;
+	}
+	else if (m_usb_route == 0x34)
+	{
+		switch (m_usb_command)
+		{
+		case 0xd1: m_usb_addr = data; break;          // Set USB address/enable
+		case 0xd8: m_usb_ep_enable = data; break;     // Endpoint enable
+		case 0xf3:
+			if (m_usb_write_index == 0) m_usb_mode = data;
+			else if (m_usb_write_index == 1) m_usb_clkdiv = data;
+			break;
+		default: break;  // Other commands require real host buffers.
+		}
+		++m_usb_write_index;
+		m_usb_ack = 1;
+	}
+}
+
+void alphasmart3k_state::usb_prepare_tx()
+{
+	// The original system can read interrupt status even with no host
+	// attached. Real USB enumeration / endpoints are not yet modeled.
+	// In an unconnected state, no interrupt bits or packet bytes exist.
+	m_usb_tx_data = 0;
+	++m_usb_read_index;
+	m_usb_bits = 0;
+	m_usb_slave_sda_low = !BIT(m_usb_tx_data, 7);
+}
+
+void alphasmart3k_state::usb_pe_line_w(unsigned pin, int state)
+{
+	bool const old_sda = m_usb_master_sda;
+	bool const old_scl = m_usb_master_scl;
+	if (pin == 1) m_usb_master_sda = bool(state);
+	else if (pin == 2) m_usb_master_scl = bool(state);
+	else return;
+
+	// Start and Stop are SDA transitions while SCL is high.
+	if (old_scl && m_usb_master_scl && old_sda && !m_usb_master_sda)
+	{
+		m_usb_state = 1; // Receive address
+		m_usb_route = m_usb_bits = m_usb_shift = 0;
+		m_usb_slave_sda_low = false;
+		return;
+	}
+	if (old_scl && m_usb_master_scl && !old_sda && m_usb_master_sda)
+	{
+		m_usb_state = 0; // STOP, idle
+		m_usb_slave_sda_low = false;
+		return;
+	}
+	if (old_scl == m_usb_master_scl)
+		return;
+
+	bool const rising = m_usb_master_scl;
+	switch (m_usb_state)
+	{
+	case 1: // Receive 8 bits, MSB first
+		if (rising)
+		{
+			m_usb_shift = (m_usb_shift << 1) | u8(m_usb_master_sda);
+			if (++m_usb_bits == 8)
+			{
+				usb_receive_byte(m_usb_shift);
+				m_usb_state = 2; // Address/data ACK preparation
+				m_usb_bits = m_usb_shift = 0;
+			}
+		}
+		break;
+	case 2: // SCL low after bit 8, slave drives the ACK
+		if (!rising)
+		{
+			m_usb_slave_sda_low = bool(m_usb_ack);
+			m_usb_state = 3;
+		}
+		break;
+	case 3: // ACK clock
+		if (!rising)
+		{
+			m_usb_slave_sda_low = false;
+			if (m_usb_route == 0x35 && !m_usb_read_index && !m_usb_write_index)
+			{
+				m_usb_state = 4; // transmit after initial address
+				usb_prepare_tx();
+			}
+			else
+			{
+				m_usb_state = 1;
+			}
+		}
+		break;
+	case 4: // Slave data out: bit available on SCL low
+		if (rising)
+		{
+			if (++m_usb_bits == 8)
+				m_usb_state = 5;
+		}
+		else
+		{
+			m_usb_slave_sda_low = !BIT(m_usb_tx_data, 7 - m_usb_bits);
+		}
+		break;
+	case 5: // After eighth bit: release SDA for master's ACK
+		if (!rising)
+		{
+			m_usb_slave_sda_low = false;
+			m_usb_state = 6;
+		}
+		break;
+	case 6: // Master ACK on ninth clock
+		if (rising)
+			m_usb_master_ack = !m_usb_master_sda;
+		else if (m_usb_master_ack)
+		{
+			m_usb_state = 4;
+			usb_prepare_tx();
+		}
+		else
+			m_usb_state = 7; // Wait for STOP/repeated START
+		break;
+	default:
+		break;
+	}
 }
 
 void alphasmart3k_state::lcd_port_c_w(unsigned bit, int state)
@@ -525,6 +709,12 @@ void alphasmart3k_state::alphasmart3k(machine_config &config)
 	// AS3000 original PowerModule.c: PG4 high means batteries normal,
 	// low triggers PowerIsBatteryLow. Model the real board input pin.
 	m_maincpu->in_port_g<4>().set(FUNC(alphasmart3k_state::battery_good_r));
+	// Actual USB control interface is wired to EZ Port E's two
+	// open-drain pins (UsbAsmModule.s / UsbModule.c).
+	m_maincpu->out_port_e<1>().set(FUNC(alphasmart3k_state::usb_port_e_w<1>));
+	m_maincpu->out_port_e<2>().set(FUNC(alphasmart3k_state::usb_port_e_w<2>));
+	m_maincpu->in_port_e<1>().set(FUNC(alphasmart3k_state::usb_sda_r));
+	m_maincpu->in_port_e<2>().set(FUNC(alphasmart3k_state::usb_scl_r));
 	m_maincpu->out_port_c<0>().set(FUNC(alphasmart3k_state::lcd_db4_w));
 	m_maincpu->out_port_c<1>().set(FUNC(alphasmart3k_state::lcd_db5_w));
 	m_maincpu->out_port_c<2>().set(FUNC(alphasmart3k_state::lcd_db6_w));

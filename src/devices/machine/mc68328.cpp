@@ -1911,7 +1911,16 @@ u8 mc68328_base_device::pdirqedge_r() // 0x41f
 void mc68328_base_device::pedir_w(u8 data) // 0x420
 {
 	LOGMASKED(LOG_GPIO_E, "%s: pedir_w: PEDIR = %02x\n", machine().describe_context(), data);
+	u8 const old = m_pedir;
 	m_pedir = data;
+	// The AS3000 original USB bit-banging code toggles PE1/PE2
+	// through PEDIR while holding PEDATA low (open-drain bus).
+	// Propagate RELEASE as 1 and driven-low as 0 when direction
+	// changes, rather than waiting for a PEDATA write.
+	if (type() == MC68EZ328)
+		for (int bit = 0; bit < 8; ++bit)
+			if (BIT(old ^ data, bit))
+				m_out_port_e_cb[bit](!(BIT(m_pesel & m_pedir, bit) && !BIT(m_pedata, bit)));
 }
 
 u8 mc68328_base_device::pedir_r() // 0x420
@@ -1926,10 +1935,10 @@ void mc68328_base_device::pedata_w(u8 data) // 0x421
 	m_pedata = data;
 	for (int i = 0; i < 8; i++)
 	{
-		if (BIT(m_pedir & m_pesel, i))
-		{
+		if (type() == MC68EZ328)
+			m_out_port_e_cb[i](!(BIT(m_pedir & m_pesel, i) && !BIT(m_pedata, i)));
+		else if (BIT(m_pedir & m_pesel, i))
 			m_out_port_e_cb[i](BIT(m_pedata, i));
-		}
 	}
 }
 
@@ -1940,7 +1949,7 @@ u8 mc68328_base_device::pedata_r() // 0x421
 	{
 		if (BIT(m_pesel, i))
 		{
-			if (BIT(m_pedir, i))
+			if (BIT(m_pedir, i) && (type() != MC68EZ328 || !BIT(m_pedata, i)))
 			{
 				data |= m_pedata & (1 << i);
 			}
@@ -1973,7 +1982,12 @@ u8 mc68328_base_device::pepuen_r() // 0x422
 void mc68328_base_device::pesel_w(u8 data) // 0x423
 {
 	LOGMASKED(LOG_GPIO_E, "%s: pesel_w: PESEL = %02x\n", machine().describe_context(), data);
+	u8 const old = m_pesel;
 	m_pesel = data;
+	if (type() == MC68EZ328)
+		for (int bit = 0; bit < 8; ++bit)
+			if (BIT(old ^ data, bit))
+				m_out_port_e_cb[bit](!(BIT(m_pesel & m_pedir, bit) && !BIT(m_pedata, bit)));
 }
 
 u8 mc68328_base_device::pesel_r() // 0x423
