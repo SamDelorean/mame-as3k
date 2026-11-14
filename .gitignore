@@ -49,3 +49,8 @@ regtests/chdman/temp
 regtests/jedutil/output
 /CMakeLists.txt
 /samples
+
+# Standalone AS3K ROM applications; retain root build-output exclusions.
+!/tools/
+/tools/*
+!/tools/as3k_rom_tools/

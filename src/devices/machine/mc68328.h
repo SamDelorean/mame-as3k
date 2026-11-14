@@ -116,6 +116,12 @@ public:
 	// EZ UART bit stream for the original AS3000 serial interface.
 	auto out_uart_txd() { return m_out_uart_txd_cb.bind(); }
 	void uart_rxd_w(int state);
+	auto out_uart_ir() { return m_out_uart_ir_cb.bind(); }
+	void uart_ir_rx_w(int state);
+	bool uart_irda_enabled() const { return (m_umisc & UMISC_IRDA_ENABLE) != 0; }
+	attotime uart_bit_period() const { return uart_bit_time(); }
+	u16 unipr_r() { return m_unipr; }
+	void unipr_w(offs_t offset, u16 data, u16 mem_mask = ~0) { COMBINE_DATA(&m_unipr); m_unipr &= 0x87ff; }
 	auto in_spim() { return m_in_spim_cb.bind(); }
 
 	auto out_pwm() { return m_out_pwm_cb.bind(); }
@@ -486,11 +492,11 @@ protected:
 	void spimdata_w(u16 data);
 	void spimcont_w(u16 data);
 
-	void ustcnt_w(u16 data);
-	void ubaud_w(u16 data);
+	void ustcnt_w(offs_t offset, u16 data, u16 mem_mask = ~0);
+	void ubaud_w(offs_t offset, u16 data, u16 mem_mask = ~0);
 	void urx_w(u16 data);
 	void utx_w(offs_t offset, u16 data, u16 mem_mask = ~0);
-	void umisc_w(u16 data);
+	void umisc_w(offs_t offset, u16 data, u16 mem_mask = ~0);
 
 	void lssa_msw_w(offs_t offset, u16 data, u16 mem_mask);
 	void lssa_lsw_w(offs_t offset, u16 data, u16 mem_mask);
@@ -695,6 +701,8 @@ protected:
 	u16  m_ubaud;       // UART Baud Control Register
 	u16  m_urx;         // UART RX Register
 	u16  m_utx;         // UART TX Register
+	u16 m_unipr = 0;
+	bool m_uart_rx_old = false;
 	u16  m_umisc;       // UART Misc Register
 	std::array<u8, 8> m_uart_tx_fifo{};
 	std::array<u8, 8> m_uart_rx_fifo{};
@@ -771,6 +779,11 @@ protected:
 	attotime uart_bit_time() const;
 	void uart_update_irq();
 	void uart_start_tx();
+	void uart_tx_line(bool level);
+	void uart_rx_line(bool level);
+	TIMER_CALLBACK_MEMBER(uart_ir_pulse_end);
+	TIMER_CALLBACK_MEMBER(uart_ir_stretch_end);
+	TIMER_CALLBACK_MEMBER(uart_rx_old_tick);
 	void fill_lcd_dma_buffer();
 
 	virtual bool rtc_int_is_active() = 0;
@@ -784,6 +797,9 @@ protected:
 	emu_timer *m_spim;
 	emu_timer *m_uart_tx_timer;
 	emu_timer *m_uart_rx_timer;
+	emu_timer *m_uart_ir_pulse_timer;
+	emu_timer *m_uart_ir_stretch_timer;
+	emu_timer *m_uart_rx_old_timer;
 
 	emu_timer *m_lcd_scan;
 	bool m_lcd_first_line;
@@ -813,6 +829,7 @@ protected:
 
 	devcb_write_line m_out_spim_cb;
 	devcb_write_line m_out_uart_txd_cb;
+	devcb_write_line m_out_uart_ir_cb;
 	devcb_read_line  m_in_spim_cb;
 
 	devcb_write_line m_out_flm_cb;
@@ -1064,6 +1081,9 @@ private:
 class mc68ez328_device : public mc68328_base_device
 {
 public:
+	// EMUBRK is sampled only during reset; unconnected means normal mode.
+	auto in_emubrk() { return m_in_emubrk_cb.bind(); }
+	bool bootstrap_mode() const { return m_bootstrap_active; }
 	mc68ez328_device(const machine_config &mconfig, const char *tag, device_t *owner, u32 clock);
 	// The EZ has one masked level-sensitive keyboard OR interrupt, not
 	// the original MC68328 per-line keyboard interrupt arrangement.
@@ -1235,6 +1255,17 @@ private:
 	u16  m_dayr;        // RTC Day Count Register
 	u16  m_dayalarm;    // RTC Day Alarm Register
 	u8   m_sam_cnt;     // RTC Sample Timer Counter (internal, not readable)
+
+	// Documented bootstrap services, implemented by an explicitly identified
+	// executable model, not a proprietary mask-ROM dump or a host parser.
+	devcb_read_line m_in_emubrk_cb;
+	bool m_bootstrap_active = false;
+	u8 m_bootstrap_vector_words = 0;
+	u16 m_bootstrap_baud = 0x010d;
+	std::array<u16, 4> m_bootstrap_buffer{};
+	memory_passthrough_handler m_bootstrap_vector_tap;
+	u16 bootstrap_rom_r(offs_t offset);
+	void bootstrap_rom_w(offs_t offset, u16 data, u16 mem_mask = ~0);
 
 	void internal_map(address_map &map) ATTR_COLD;
 	void cpu_space_map(address_map &map) ATTR_COLD;

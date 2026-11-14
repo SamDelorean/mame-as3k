@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-3-Clause
+"""Install launchers for this canonical tree, without replacing existing files."""
+from pathlib import Path
+import os
+import sys
+ROOT=Path(__file__).resolve().parents[1]
+data=Path(os.environ.get("XDG_DATA_HOME",str(Path.home()/".local/share")))
+applications=data/"applications"
+bindir=Path.home()/".local/bin"
+entries=[("as3k-stable","AS3K Stable"),("as3k-diag","AS3K-DIAG"),
+         ("as3k-rom-builder","Constructor de ROM AS3K"),("as3k-applet-test","Probar applet AS3K")]
+targets=[]
+for command,title in entries:
+    script=ROOT/"scripts"/command
+    desktop=applications/(command+".desktop")
+    content=(f"[Desktop Entry]\nType=Application\nName={title}\n"
+             f'Exec="{script}"\nPath={ROOT}\nTerminal=false\n'
+             "Categories=Utility;Development;\nIcon=computer\n")
+    link=bindir/command
+    if desktop.exists() and desktop.read_text()!=content:
+        sys.exit(f"No se reemplazará {desktop}")
+    if link.is_symlink():
+        if link.resolve()!=script:
+            sys.exit(f"No se reemplazará {link}")
+    elif link.exists():
+        sys.exit(f"No se reemplazará {link}")
+    targets.append((desktop,content,link,script))
+applications.mkdir(parents=True,exist_ok=True)
+bindir.mkdir(parents=True,exist_ok=True)
+for desktop,content,link,script in targets:
+    if not desktop.exists():
+        with desktop.open("x") as stream:
+            stream.write(content)
+    if not link.is_symlink():
+        link.symlink_to(script)
+    print(desktop)
+    print(link)

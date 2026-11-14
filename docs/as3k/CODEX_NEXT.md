@@ -1,220 +1,151 @@
-# CLOSED HISTORICAL HANDOFF — MC68EZ328 Port-A PAPUEN / WDTH8 fidelity
-
-> CLOSED / DYNAMIC_PASS — 2026-10-28. This retained historical
-> specification is NOT a pending Codex task. Implemented in the ONE canonical
-> AS3K-DIAG build (local commit 07840d51145). See
-> docs/as3k/CODEX_RESULT.md and STATUS.md for factual results and R4.
-> Do not launch Codex, repeat R3, create another MAME tree or interpret
-> the old pull/push instructions below as current authorization.
-
-Date: 2026-08-26
-
-Read `AGENTS.md`, `docs/as3k/STATUS.md`, and the current `docs/as3k/CODEX_RESULT.md` first.
-
-## Established state
-
-The AS3K external keyboard latch is now implemented and dynamically validated in commit:
-
-`c5e6eb1ba51694e672d133667f86c2d3c1f71be1`
-
-Keyboard Phase 1 still returns normally to caller `0x00420168` with `D0 = 0`.
-
-The static MC68EZ328 keyboard GPIO audit is commit:
-
-`08816104002f27365ace1798eddd06b78550c764`
-
-Treat these audit conclusions as established:
-
-- `PADIR` / `PADATA` are mapped for MC68EZ328 through `base_internal_map()`;
-- `PAPUEN = 0xFFFFF402` is genuinely missing and needs real state/semantics;
-- `0xFFFFF403` is reserved on MC68EZ328 and must **not** be implemented as a fake PASEL register;
-- Port-A GPIO selection on EZ is controlled by `SCR.WDTH8`;
-- the current EZ core changes internal `m_pasel` from `SCR.WDTH8`, but the audit found that this internal selection state is not saved on the EZ path and the clear/set behavior must be checked for exact fidelity;
-- `PDSEL`, `PDKBEN/PKBDINT`, keyboard matrix plumbing, input keys, and Phase 2 are separate later stages.
-
-This task explicitly authorizes a **narrow MC68EZ328 core change** in `src/devices/machine/mc68328.cpp` and `.h` only as required for this Port-A stage.
-
-Do not broaden into Port D or other peripherals.
-
----
-
-## A. Repository gate
-
-From `~/Projects/alphasmart/mame-as3k-dev`:
-
-1. `git pull --ff-only origin as3k-mame0289-dev`.
-2. Confirm branch `as3k-mame0289-dev`, clean tracked status, and `git diff --check`.
-3. Confirm latch commit `c5e6eb1ba51694e672d133667f86c2d3c1f71be1` is an ancestor of HEAD.
-4. Confirm `docs/as3k/STATUS.md` identifies EZ Port-A fidelity as the next stage.
-5. Do not touch `master`.
-
-Before editing, inspect the exact current implementations of:
-
-- `base_internal_map()`;
-- `mc68ez328_device::internal_map()`;
-- `padata_r/w`;
-- `padir_r/w`;
-- `scr_w` and SCR reset/save behavior;
-- `m_pasel` declaration/reset/save registration across base/original/EZ classes.
-
-Also re-check the MC68EZ328 manual semantics for PAPUEN and `SCR.WDTH8`.
-
-If the smallest correct implementation would require a broad redesign or would alter original `mc68328_device` behavior in a way you cannot prove safe, stop and report before coding.
-
----
-
-## B. Required behavior — PAPUEN
-
-Implement PAPUEN for **MC68EZ328** with the documented semantics:
-
-- address: `0xFFFFF402`;
-- eight read/write pull-up-enable bits;
-- reset value: `0xFF`;
-- saved state;
-- read returns current state;
-- write stores the byte.
-
-For Port-A pins configured as inputs and selected as GPIO, `PADATA` must use the input callback when one is connected; when no callback is connected, the documented pull-up state must provide the deterministic fallback instead of hardwired zero.
-
-Preserve existing output-latch behavior for Port-A outputs.
-
-Do not silently change original-MC68328 behavior. If shared base helpers/state are the cleanest implementation, ensure the original device retains its previous externally visible behavior unless the processor documentation independently justifies a correction.
-
-Do **not** map anything at `0xFFFFF403` for EZ.
-
----
-
-## C. Required behavior — SCR.WDTH8 / internal Port-A selection
-
-Audit the current `mc68ez328_device::scr_w()` implementation against the manual and correct only the demonstrated selection-state defect.
-
-Required end state:
-
-- when `SCR.WDTH8` selects 8-bit operation / Port-A GPIO, internal Port-A selection must become the corresponding GPIO-selected state;
-- when that bit is cleared, internal selection must return to the documented non-GPIO/data-bus state rather than remaining latched from an earlier set, if that is what the current code incorrectly does;
-- the EZ save-state path must preserve the internal Port-A selection state, or it must be reliably derived from another saved register on restore in a way consistent with MAME save-state conventions.
-
-Do not create an externally visible EZ PASEL register at `0xFFFFF403`.
-
-Do not change unrelated SCR bits or chip-select behavior.
-
----
-
-## D. Scope restrictions
-
-Do not implement in this task:
-
-- PDSEL;
-- PDKBEN / PKBDINT;
-- PDIRQEN/PDPOL/PDIQEG fixes;
-- keyboard matrix callbacks;
-- PA0–PA6 driver column plumbing;
-- PD0–PD7 row callbacks;
-- `INPUT_PORTS` or key mappings;
-- Keyboard Phase 2;
-- new LCD behavior;
-- dynamic chip-select remapping;
-- any new ROM definition or fixture.
-
-Do not modify `src/mame/skeleton/alphasma3k.cpp` unless a build-only include/context adjustment is absolutely unavoidable. The already validated latch and LCD bridge should remain byte-for-byte untouched if possible.
-
----
-
-## E. Build and static checks
-
-Run the reduced build without clean:
-
-```sh
-make SUBTARGET=alphasma3k SOURCES=src/mame/skeleton/alphasma3k.cpp OSD=sdl REGENIE=1 -j2
-```
-
-Verify:
-
-- build succeeds;
-- all four AS3K drivers remain present;
-- `./alphasma3k -verifyroms asma3kdi` is good;
-- `./alphasma3k -verifyroms asma3kdv` is good;
-- `git diff --check` passes.
-
-Do not execute original `asma3k`.
-
----
-
-## F. Narrow dynamic validation on `asma3kdv`
-
-Create a local-only debugger script under `../diagnostic/`, e.g.:
-
-`as3kdv_keyboard_porta.cmd`
-
-Use explicit `0x...` literals everywhere.
-
-The run must stop before `KeyboardInitializeModulePhase2`.
-
-At minimum prove the following on the real AlphaWord Phase-1 path after the core change:
-
-1. Startup writes SCR with the established value used by this fixture (`0x1D` from the linked initialization path), and the EZ Port-A selection state used by `PADATA` is consistent with `WDTH8` being active.
-2. At Phase-1 entry, PAPUEN is mapped and its first read returns the documented reset value `0xFF` unless earlier firmware writes prove otherwise.
-3. The Phase-1 `PAPUEN &= 0x80` sequence therefore writes the value dictated by the actual prior read (normally expected `0x80` from reset `0xFF`). Record the observed value; do not force it if earlier firmware changed the register.
-4. The former PAPUEN unmapped diagnostic at `0xFFFFF402` disappears for the PAPUEN byte lane.
-5. The AlphaSmart access to reserved `0xFFFFF403` remains harmless and is **not** serviced by a newly invented EZ register.
-6. PADIR/PADATA writes remain finite and Phase 1 still reaches its RTS and caller return `0x00420168` with `D0 = 0`.
-7. The already implemented latch write at `0x00600000 = 0xFF` remains mapped; its old unmapped message must not reappear.
-8. No Phase 2, keyboard interrupt handler, `InterruptInstallHandler`, or established exception handler fires.
-
-Because prior debugger byte readback of mapped GPIO registers was ambiguous, use the narrowest reliable method to prove retained Port-A state. Prefer normal debugger program-space reads if they now behave consistently. If they remain ambiguous, use temporary diagnostic logging inside the relevant core handlers to demonstrate state and remove every temporary log before the final build/commit. Do not patch AlphaWord or a ROM fixture to manufacture a readback test.
-
-### Optional micro-check for WDTH8 clearing
-
-If existing debugger commands can safely write/read SCR without patching ROM or broadening execution, you may perform one local-only controlled micro-check that toggles WDTH8 and demonstrates internal Port-A selection follows both set and clear transitions, restoring the original SCR before continuing. Do this only if the syntax and side effects are already understood. Otherwise validate the clear path by source/manual reasoning and report that dynamic AlphaWord coverage exercises only the set state.
-
----
-
-## G. Regression / publication boundary
-
-After validation:
-
-1. remove all temporary logging/instrumentation;
-2. rebuild final source if temporary instrumentation affected compiled files;
-3. `git diff --check`;
-4. inspect `git status --short` and exact diff;
-5. ensure no ROM, firmware, historical binary/source archive, CGROM, diagnostic fixture/script/log, generated executable, or build artifact is staged.
-
-`docs/as3k/CODEX_RESULT.md` must report factually:
-
-- exact core files changed;
-- exact PAPUEN state/map/reset/save implementation;
-- how PADATA fallback was changed and why original MC68328 behavior is preserved;
-- exact `SCR.WDTH8` selection/save-state correction;
-- explicit confirmation that no EZ PASEL was mapped at `0xFFFFF403`;
-- build and ROM-audit results;
-- dynamic PAPUEN read/write values observed in Phase 1;
-- whether unmapped PAPUEN diagnostics disappeared;
-- retained PADIR/PADATA evidence and any remaining debugger-space ambiguity;
-- latch regression result;
-- Phase-1 RTS/caller-return and `D0`;
-- safety-break results;
-- whether WDTH8 clear behavior was dynamically exercised or only statically validated;
-- final `git diff --check`, status, commit SHA, and push result.
-
-Update `docs/as3k/STATUS.md` to keep the public handoff factual if the implementation passes.
-
-Commit only safe core/documentation changes and push only to `origin/as3k-mame0289-dev`.
-
-## Pass criteria
-
-Pass means:
-
-- PAPUEN exists for EZ with correct reset/read/write/save semantics;
-- Port-A input fallback honors PAPUEN without changing original MC68328 externally visible behavior;
-- `SCR.WDTH8` controls the internal EZ Port-A selection state correctly and that state is save-state safe;
-- no fake PASEL register exists at `0xFFFFF403`;
-- Phase 1 observes mapped PAPUEN behavior and still returns normally with `D0 = 0`;
-- the external latch remains mapped and valid;
-- no later keyboard/interrupt stage was entered or implemented;
-- final build/audits pass and only safe changes are pushed.
-
-## Stop condition
-
-Stop after this **Port-A core-fidelity stage** is implemented, validated, documented, committed, and pushed.
-
-**Do not add the keyboard matrix, PDSEL, PDKBEN/PKBDINT, key mappings, or execute Keyboard Phase 2 in this task.**
+# CODEX NEXT — SINGLE INTEGRAL AS3K-DIAG R10 USB TASK (2026-11-02)
+CURRENT HANDOFF: R10 OPEN/FAIL, NOT AN ACCREDITED USB IMPLEMENTATION.
+Supersedes old R3 handoff, which was archived privately without loss.
+
+## Binding instructions
+Work in ONE canonical tree only: /home/spc/Projects/alphasmart/mame-as3k-dev;
+branch as3k-mame0289-dev; MAME 0.289 minimal build; binary ./alphasma3k.
+Never create clone, branch, worktree, standalone peripheral, fake emulator,
+ROM-version-specific emulator, replacement firmware or side project.
+Do not run Codex workers/timers or fragment this job into minor milestones.
+Do not commit/push without NEW owner approval. No git reset, stash, clean,
+pull, merge, checkout or rebase. Preserve the dirty worktree exactly outside
+explicitly scoped USB edits. Protect private ROM/dumps/original source/Ghidra
+against publication or uploads. No firmware patch or direct CPU-RAM injection.
+
+BEFORE editing read:
+- AGENTS.md and /home/spc/Projects/alphasmart/AGENTS.md
+- docs/as3k/STATUS.md, docs/as3k/R10_PDIUSBD11_I2C_HW_20261101.md
+- docs/as3k/CODEX_RESULT.md and this CURRENT task
+- git status --short --branch, git diff, git diff --check
+HEAD at handoff 3ba23b4713f9a1eceb7135bdf9622bdadb43b599,
+ahead 12 / behind 2. Dirty before this handoff:
+AGENTS.md, STATUS.md, R10_PDIUSBD11_I2C_HW_20261101.md,
+src/mame/skeleton/alphasma3k.cpp; untracked R1 static report and
+src/mame/skeleton/as3k_usbip.inc. Both have prior valuable work.
+
+## Original reference material ALREADY on T160 — do not re-invent
+Manufacturer source (read in place; not for Git or public ZIP):
+/home/spc/GoogleDrive/ALPHASMART/Soruce code/Software/ModuleSources/
+Important: the historical spelling is Soruce code.
+Read SystemModule.c/.h, InterruptModule.c/.h, UsbModule.c,
+UsbChip.c/.h, UsbAsmModule.s, UsbIsr.c, UsbMain.c,
+UsbRequestResponse.c/.h, UsbToAS.c, UsbGet.h, Usb100.h,
+UpdaterCommands.h, KeyboardModule.c, AS3000InitCode.s,
+SystemAssembly.s and supporting headers as necessary.
+Static source may not match active ROM build: verify its relevant
+functions with Ghidra/actual ROM, do not blindly assume a source label.
+
+Ghidra: /home/spc/GhidraProjects/AS3KReference/AS3K_Firmware.gpr;
+headless /home/spc/.local/bin/ghidra-headless. Reuse project; do not
+repeat complete bulk disassembly/import. gdb-multiarch permitted to
+disassemble selected ROM addresses using local PRIVATE temporary ELF.
+
+Private original ROM and evidence paths:
+/home/spc/Projects/alphasmart/private/roms/as3k/os3k_minimal/
+/home/spc/Projects/alphasmart/private/roms/as3k/mame_sets/
+BOOT/WRITER ROM sets: asma3ksb, asma3ksw, no ROM modification.
+MAME diagnostics asma3kdi, asma3kdv are ROM variants in SAME emulator.
+Do not run original asma3k machine outside AGENTS.md authorizations.
+
+Existing software:
+src/mame/skeleton/alphasma3k.cpp
+src/mame/skeleton/as3k_usbip.inc (uncommitted experimental USB/IP)
+src/devices/machine/mc68328.cpp/.h
+USB controller: Philips PDIUSBD11D is a USB DEVICE, not a USB host.
+Use datasheet and exact original EP0 and interrupt semantics.
+
+## Precisely confirmed before Codex
+- OS3K original ROM boots, AlphaWord runs, LCD dual KS0066, matrix,
+  RAM/NVRAM, Flash B3 and original applet persist; UART RS232 PTY test PASS.
+- D11 PE1/PE2 I2C via original MC68EZ328 bitbang, endpoint indices 2–9,
+  F0 buffer, split pointer, FULL=20h, STALL=08h, PF2 active-low reset,
+  PF1 INT_N no-host handling. BOOT/WRITER each R10_D11_SPEC_PASS=1
+  when physical PF2 RESET_N is **released before I2C script**.
+  Do not run older pre-reset-hold script unchanged: it returns FF
+  due to missing power/reset setup. Use private derivative
+  r10_d11_spec_reset_released_20261101.lua for valid check.
+- New experimental opt-in USB/IP listener binds loopback
+  AS3K_USBIP_PORT=3240. An independent client runs USB/IP
+  DEVLIST + IMPORT PASS using original source VID 081E, PID BD04,
+  but this is ONLY USB/IP metadata, NOT USB enumeration.
+- Independent host then sends genuine USB control request
+  GET_DESCRIPTOR setup bytes 80 06 00 01 00 00 12 00,
+  needing 18 bytes from the genuine firmware. It TIMEOUTs / EOFs.
+  NO original D11 SetMode(F3), firmware EP0 reply, USB soft-connect,
+  bus reset, original USB_Isr execution or genuine enumeration seen.
+  Firmware remains in keyboard-scan PC 004CE922/004CE9E2/
+  004D0FDE. GPIO when host imported:
+  PB=00, PBDIR=78, PBSEL=FA, PE=00, PEDIR=67, PF=01, PFSEL=F5.
+  IRQ5 pending and service upper word 0010; IMR upper word 00FF.
+  ICR is 0080 when read **16-bit** (prior byte-only read showed
+  misleading 00). A **diagnostic-only** forcing IMR 00FF->00EF
+  still did NOT start firmware USB. DO NOT force-mask as a fix.
+- Original C states that SystemCheckHostConnection inspects SDA,
+  System_CallConnectionHandler uses PB3/PB6 cable signals,
+  System_HostInterruptHandler sets connection, and
+  USBHandleConnection initiates original D11 setup.
+  Determine ACTUAL ROM call graph/control path via Ghidra.
+- USB/IP transport code has NOT been kernel-VHCI-attached nor
+  proven correct for real control transfers. It must be audited,
+  not presumed done. Fake USB/IP VID/PID metadata cannot replace
+  firmware-generated descriptor, no invented USB descriptor/echo.
+- Last executable compiled/link PASS, -validate exit0,
+  four ROM audits 4/4 OK, but R10 END TO END FAIL.
+
+## ONE continuous engineering assignment (not a plan-only exercise)
+1. STATIC FIRST: map original USB entry and its real ROM call paths
+   and IRQ5 enable/dispatch, original boot and USB service routines.
+   Explain/verify precisely why ROM stays in keyboard scanning,
+   PE outputs low and IRQ5 IMR upper 00FF. Check firmware revision,
+   System3 ISR vectors, hardware pin polarities, MAME irq logic.
+   No blind patches and no redoing closed features.
+2. Complete *physical hardware emulation* of cable VBUS/PB3/PB6,
+   SDA/SCL external pullups PE1/PE2, PF1 cable IRQ versus D11 INT_N
+   multiplexing, PF2 RESET_N, EZ328 interrupt and direction/mux,
+   PDIUSBD11 command/data I2C, SETUP, IRQ F4/status, EP0 handshake,
+   FIFO, address/configure, NAK/STALL, bus reset, power changes.
+   Reuse MAME features and fix the uncommitted in-driver USB/IP
+   adapter (packet lengths, endianness, command parsing,
+   control stages, ZLP, short packet, disconnect, host timing).
+   Keep one driver and one executable; no synthetic firmware response.
+3. Independent host must receive 18-byte original Device Descriptor
+   from ROM EP0 in response to 80 06 00 01 00 00 12 00; verify
+   original ROM's actual VID/PID; complete standard GET_DESCRIPTOR
+   configuration/string, SET_ADDRESS, SET_CONFIGURATION and control
+   status stages. The original firmware must generate the bytes.
+   DEVLIST/IMPORT alone explicitly DO NOT COUNT.
+4. Complete at least one nontrivial original Get Utility /
+   AlphaSmart Manager compatible transfer in BOTH directions, with
+   precise byte-by-byte evidence and source-backed protocol
+   (UsbToAS.c, UsbMain.c, UsbRequestResponse.c etc).
+   Do not claim support for printer/unsupported hardware pathways.
+5. Build same reduced MAME ./alphasma3k, -validate, audit 4 ROMs;
+   recheck D11 BOOT/WRITER I2C, original UART, keyboard, SRAM and
+   Intel Flash relevant regressions. Real CPU + original firmware
+   and independent-host evidence REQUIRED, including return codes,
+   MMIO/IRQ trace, original response bytes and actual transfer.
+
+Build: TMPDIR=/dev/shm make SUBTARGET=alphasma3k
+ SOURCES=src/mame/skeleton/alphasma3k.cpp OSD=sdl REGENIE=1
+ PRECOMPILE=0 -j3
+(As one shell command). Do not delete /tmp files or user data to
+resolve quota. Validate with ./alphasma3k -validate.
+Audit four ROMs with -verifyroms and correct private -rompath.
+
+## Acceptance is BINARY
+R10 PASS only when the original unmodified firmware enters USB handler,
+responds with its 18-byte genuine device descriptor to real host
+control transfer, completes enumeration and a meaningful genuine
+bidirectional original file/GET transaction, and targeted regressions
+all PASS. No partial fake milestones or cosmetically renamed tests.
+If it cannot finish, label R10 OPEN/FAIL and provide exact
+non-speculative root cause, proof and remaining blocked step.
+Do not say PASS because of linking, FIFO, DEVLIST, IMPORT or injected
+data. No repeated planning or asking user for already known details.
+
+Append factual R10 results to docs/as3k/CODEX_RESULT.md
+(preserve existing entries); update STATUS.md and R10 technical doc
+and keep private logs. End with exact observed bytes, pass/fail matrix,
+files changed, git diff --check, and git status --short --branch.
+NO commit/push or release without additional specific permission.

@@ -10,6 +10,7 @@
 
 #include "emu.h"
 #include "mc68328.h"
+#include "mc68ez328_bootstrap.h"
 
 #define LOG_SCR         (1U << 1)
 #define LOG_CS_GRP      (1U << 2)
@@ -69,6 +70,7 @@ mc68328_base_device::mc68328_base_device(const machine_config &mconfig, device_t
 	, m_out_pwm_cb(*this)
 	, m_out_spim_cb(*this)
 	, m_out_uart_txd_cb(*this)
+	, m_out_uart_ir_cb(*this)
 	, m_in_spim_cb(*this, 0)
 	, m_out_flm_cb(*this)
 	, m_out_llp_cb(*this)
@@ -97,6 +99,7 @@ mc68328_device::mc68328_device(const machine_config &mconfig, const char *tag, d
 
 mc68ez328_device::mc68ez328_device(const machine_config &mconfig, const char *tag, device_t *owner, u32 clock)
 	: mc68328_base_device(mconfig, MC68EZ328, tag, owner, clock)
+	, m_in_emubrk_cb(*this, 1)
 {
 	m_cpu_space_config.m_internal_map = address_map_constructor(FUNC(mc68ez328_device::cpu_space_map), this);
 	m_cpu_space_config.m_addr_width = 32;
@@ -285,8 +288,10 @@ void mc68328_device::internal_map(address_map &map)
 
 void mc68ez328_device::internal_map(address_map &map)
 {
+	map(0xffffff00, 0xffffffff).rw(FUNC(mc68ez328_device::bootstrap_rom_r), FUNC(mc68ez328_device::bootstrap_rom_w));
 	base_internal_map(0xfffff000, map);
 
+	map(0xfffff90a, 0xfffff90b).rw(FUNC(mc68ez328_device::unipr_r), FUNC(mc68ez328_device::unipr_w));
 	map(0xfffff004, 0xfffff007).r(FUNC(mc68ez328_device::revision_r));
 	map(0xfffff402, 0xfffff402).rw(FUNC(mc68ez328_device::papuen_r), FUNC(mc68ez328_device::papuen_w));
 	map(0xfffff41e, 0xfffff41e).rw(FUNC(mc68ez328_device::pdkben_r), FUNC(mc68ez328_device::pdkben_w));
@@ -347,6 +352,9 @@ void mc68328_base_device::device_start()
 	m_spim = timer_alloc(FUNC(mc68328_base_device::spim_tick), this);
 	m_uart_tx_timer = timer_alloc(FUNC(mc68328_base_device::uart_tx_tick), this);
 	m_uart_rx_timer = timer_alloc(FUNC(mc68328_base_device::uart_rx_tick), this);
+	m_uart_ir_pulse_timer = timer_alloc(FUNC(mc68328_base_device::uart_ir_pulse_end), this);
+	m_uart_ir_stretch_timer = timer_alloc(FUNC(mc68328_base_device::uart_ir_stretch_end), this);
+	m_uart_rx_old_timer = timer_alloc(FUNC(mc68328_base_device::uart_rx_old_tick), this);
 	m_lcd_scan = timer_alloc(FUNC(mc68328_base_device::lcd_scan_tick), this);
 
 	m_lcd_line_buffer = std::make_unique<u16[]>(1024 / 16); // 1024px wide, up to 16 pixels per word
@@ -372,6 +380,10 @@ void mc68ez328_device::device_start()
 	m_dayr = 0;
 	m_dayalarm = 0;
 	m_sam_cnt = 0;
+	save_item(NAME(m_bootstrap_active));
+	save_item(NAME(m_bootstrap_vector_words));
+	save_item(NAME(m_bootstrap_baud));
+	save_item(NAME(m_bootstrap_buffer));
 }
 
 //-------------------------------------------------
@@ -440,6 +452,12 @@ void mc68328_base_device::device_reset()
 	m_urx = 0x0000;
 	m_utx = 0x0000;
 	m_umisc = 0x0000;
+	m_unipr = 0;
+	m_uart_rx_old = false;
+	m_uart_ir_pulse_timer->adjust(attotime::never);
+	m_uart_ir_stretch_timer->adjust(attotime::never);
+	m_uart_rx_old_timer->adjust(attotime::never);
+	m_out_uart_ir_cb(0);
 	m_uart_tx_head = m_uart_tx_tail = m_uart_tx_count = 0;
 	m_uart_rx_head = m_uart_rx_tail = m_uart_rx_count = 0;
 	m_uart_tx_frame = 0;
@@ -547,6 +565,41 @@ void mc68ez328_device::device_reset()
 {
 	mc68328_base_device::device_reset();
 
+	// MC68EZ328UM 16.1.1, Figure 16-1. These are actual reset bus
+	// reads, not edits to the external SRAM or CPU PC/SP registers.
+	m_bootstrap_active = !m_in_emubrk_cb();
+	m_bootstrap_vector_words = m_bootstrap_active ? 4 : 0;
+	m_bootstrap_buffer.fill(0);
+	// The configured MAME clock is not a model of the reset PLL. Select
+	// the closest integer prescaler to the documented 9600-baud link.
+	u32 best_error = ~u32(0);
+	for (unsigned div = 0; div < 8; ++div)
+		for (unsigned pre = 1; pre <= 65; ++pre)
+		{
+			u32 const baud = clock() / (16 * pre * (1U << div));
+			u32 const error = baud > 9600 ? baud - 9600 : 9600 - baud;
+			if (error < best_error)
+			{
+				best_error = error;
+				m_bootstrap_baud = (div << 8) | (65 - pre);
+			}
+		}
+	m_bootstrap_vector_tap.remove();
+	m_bootstrap_vector_tap = space(AS_PROGRAM).install_read_tap(0, 7,
+		"ez328_bootstrap_reset_vectors",
+		[this](offs_t offset, u16 &data, u16 mem_mask)
+		{
+			if (m_bootstrap_vector_words && !machine().side_effects_disabled())
+			{
+				static constexpr u16 vectors[] = { 0xfffc, 0xfffc, 0xffff, 0xff00 };
+				data = (data & ~mem_mask) | (vectors[(offset >> 1) & 3] & mem_mask);
+				--m_bootstrap_vector_words;
+				logerror("EZ328 bootstrap RESET read address=%08X data=%04X mask=%04X\n", u32(offset), data, mem_mask);
+			}
+		});
+	logerror("EZ328 RESET EMUBRK=%u bootstrap=%u%s\n", unsigned(!m_bootstrap_active), unsigned(m_bootstrap_active),
+		m_bootstrap_active ? " service=independently-authored-executable-model (not Motorola mask ROM)" : "");
+
 	m_papuen = 0xff;
 	m_pdkben = 0x00;
 	m_csa = 0x00e0;
@@ -581,6 +634,24 @@ void mc68ez328_device::device_reset()
 	m_rtc_sample_timer->adjust(attotime::from_ticks(64, 32768), 0, attotime::from_ticks(64, 32768));
 	m_watchdog = 0x0001;
 	m_sam_cnt = 0;
+}
+
+u16 mc68ez328_device::bootstrap_rom_r(offs_t offset)
+{
+	if (!m_bootstrap_active)
+		return 0xffff;
+	if (offset == 0 && !machine().side_effects_disabled())
+		logerror("EZ328 BOOTSTRAP_ENTRY fetch address=FFFFFF00 data=%04X\n", ez328_bootstrap_model[0]);
+	if (offset >= 0x55 && offset < 0x59)
+		return m_bootstrap_buffer[offset - 0x55];
+	// Immediate operand of the model's first MOVE.W, derived from clock.
+	return offset == 1 ? m_bootstrap_baud : ez328_bootstrap_model[offset];
+}
+
+void mc68ez328_device::bootstrap_rom_w(offs_t offset, u16 data, u16 mem_mask)
+{
+	if (m_bootstrap_active && offset >= 0x55 && offset < 0x59)
+		COMBINE_DATA(&m_bootstrap_buffer[offset - 0x55]);
 }
 
 void mc68328_base_device::register_state_save()
@@ -644,6 +715,8 @@ void mc68328_base_device::register_state_save()
 	save_item(NAME(m_urx));
 	save_item(NAME(m_utx));
 	save_item(NAME(m_umisc));
+	save_item(NAME(m_unipr));
+	save_item(NAME(m_uart_rx_old));
 	save_item(NAME(m_uart_tx_fifo));
 	save_item(NAME(m_uart_rx_fifo));
 	save_item(NAME(m_uart_tx_head));
@@ -1207,6 +1280,16 @@ void mc68328_base_device::update_ipr_state(u32 changed_mask)
 	const int irq_level = get_irq_level_for_mask(changed_mask);
 	const u32 irq_mask = get_irq_mask_for_level(irq_level);
 
+	// EZ ISR reflects pending *unmasked* sources, not a latched in-service
+	// flag. A level source still asserted when IMR is cleared must wake STOP
+	// again; retaining GISR across mask/unmask loses that request.
+	if (type() == MC68EZ328 && irq_level)
+	{
+		m_gisr = (m_gisr & ~irq_mask) | (m_ipr & ~m_imr & irq_mask);
+		set_input_line(irq_level, (m_gisr & irq_mask) ? ASSERT_LINE : CLEAR_LINE);
+		return;
+	}
+
 	if (!irq_level || !irq_mask)
 	{
 		return;
@@ -1236,6 +1319,14 @@ void mc68328_base_device::update_ipr_state(u32 changed_mask)
 
 void mc68328_base_device::update_imr_state(u32 changed_mask)
 {
+	if (type() == MC68EZ328)
+	{
+		m_gisr = m_ipr & ~m_imr;
+		for (int level = 1; level <= 7; ++level)
+			set_input_line(level, (m_gisr & get_irq_mask_for_level(level)) ? ASSERT_LINE : CLEAR_LINE);
+		return;
+	}
+
 	int irq_level = get_irq_level_for_mask(changed_mask);
 	u32 irq_mask = get_irq_mask_for_level(irq_level);
 	u32 level_mask = irq_mask & changed_mask;
@@ -3119,7 +3210,11 @@ attotime mc68328_base_device::uart_bit_time() const
 	// The AS3000 board clock is currently configured as 16 MHz.
 	u32 const prescaler = 65 - (m_ubaud & 0x3f);
 	u32 const divider = 1U << ((m_ubaud >> 8) & 7);
-	u32 const baud = std::max(1U, u32(clock()) / (16 * prescaler * divider));
+	u32 const tap = (m_unipr >> 8) & 7;
+	u32 const noninteger = (256 + (m_unipr & 0xff)) << tap;
+	u32 const baud = (m_unipr & 0x8000)
+		? std::max(1U, u32(u64(clock()) * 128 / (16 * noninteger * divider)))
+		: std::max(1U, u32(clock()) / (16 * prescaler * divider));
 	return attotime::from_hz(baud);
 }
 
@@ -3128,8 +3223,15 @@ void mc68328_base_device::uart_update_irq()
 	if (type() != MC68EZ328)
 		return;
 	bool const enabled = bool(m_ustcnt & USTCNT_UART_EN);
-	bool const tx_irq = (m_ustcnt & USTCNT_TX_EMPTY_EN) && !m_uart_tx_active && !m_uart_tx_count;
-	bool const rx_irq = (m_ustcnt & USTCNT_RX_RDY_EN) && m_uart_rx_count;
+	bool const tx_irq = (m_ustcnt & USTCNT_TX_EN) &&
+		(((m_ustcnt & USTCNT_TX_EMPTY_EN) && !m_uart_tx_count) ||
+		 ((m_ustcnt & USTCNT_TX_HALF_EN) && m_uart_tx_count < 4) ||
+		 ((m_ustcnt & USTCNT_TX_AVAIL_EN) && m_uart_tx_count < 8));
+	bool const rx_irq = (m_ustcnt & USTCNT_RX_EN) &&
+		(((m_ustcnt & USTCNT_RX_RDY_EN) && m_uart_rx_count) ||
+		 ((m_ustcnt & USTCNT_RX_HALF_EN) && m_uart_rx_count >= 4) ||
+		 ((m_ustcnt & USTCNT_RX_FULL_EN) && m_uart_rx_count == 8) ||
+		 ((m_ustcnt & 0x0080) && m_uart_rx_old));
 	set_interrupt_line(INT_UART, enabled && (tx_irq || rx_irq));
 }
 
@@ -3144,7 +3246,7 @@ void mc68328_base_device::uart_start_tx()
 	m_uart_tx_frame = (u16(data) << 1) | 0x200;
 	m_uart_tx_bits_left = 10;
 	m_uart_tx_active = true;
-	m_out_uart_txd_cb(m_uart_tx_frame & 1);
+	uart_tx_line(m_uart_tx_frame & 1);
 	m_uart_tx_frame >>= 1;
 	--m_uart_tx_bits_left;
 	m_uart_tx_timer->adjust(uart_bit_time());
@@ -3157,7 +3259,7 @@ TIMER_CALLBACK_MEMBER(mc68328_base_device::uart_tx_tick)
 		return;
 	if (m_uart_tx_bits_left)
 	{
-		m_out_uart_txd_cb(m_uart_tx_frame & 1);
+		uart_tx_line(m_uart_tx_frame & 1);
 		m_uart_tx_frame >>= 1;
 		--m_uart_tx_bits_left;
 		m_uart_tx_timer->adjust(uart_bit_time());
@@ -3165,13 +3267,65 @@ TIMER_CALLBACK_MEMBER(mc68328_base_device::uart_tx_tick)
 	else
 	{
 		m_uart_tx_active = false;
-		m_out_uart_txd_cb(1);
+		uart_tx_line(1);
 		uart_start_tx();
 		uart_update_irq();
 	}
 }
 
+// MC68EZ328UM 11.2.3.2: SIR zeros are three non-integer
+// prescaler clocks, irrespective of UART baud. Callback denotes optical
+// energy, active high; the external transceiver handles pin polarity.
+void mc68328_base_device::uart_tx_line(bool level)
+{
+	if (!(m_umisc & UMISC_IRDA_ENABLE))
+	{
+		m_out_uart_txd_cb(level);
+		return;
+	}
+	m_out_uart_txd_cb(1);
+	if (!level && !BIT(m_pesel, 5) && ((m_unipr >> 8) & 7) != 7)
+	{
+		m_out_uart_ir_cb(1);
+		u32 const ticks = 3 * ((256 + (m_unipr & 0xff)) << ((m_unipr >> 8) & 7));
+		m_uart_ir_pulse_timer->adjust(attotime::from_ticks(ticks, u64(clock()) * 128));
+	}
+}
+
+TIMER_CALLBACK_MEMBER(mc68328_base_device::uart_ir_pulse_end)
+{
+	m_out_uart_ir_cb(0);
+}
+
 void mc68328_base_device::uart_rxd_w(int state)
+{
+	if (!(m_umisc & UMISC_IRDA_ENABLE))
+		uart_rx_line(bool(state));
+}
+
+void mc68328_base_device::uart_ir_rx_w(int state)
+{
+	if (type() == MC68EZ328 && (m_umisc & UMISC_IRDA_ENABLE) && !BIT(m_pesel, 4) && state)
+	{
+		uart_rx_line(false);
+		// Restore the logical one after the zero's sample point. Consecutive
+		// zero symbols retrigger at their own bit boundary.
+		m_uart_ir_stretch_timer->adjust(uart_bit_time() * 3 / 4);
+	}
+}
+
+TIMER_CALLBACK_MEMBER(mc68328_base_device::uart_ir_stretch_end)
+{
+	uart_rx_line(true);
+}
+
+TIMER_CALLBACK_MEMBER(mc68328_base_device::uart_rx_old_tick)
+{
+	m_uart_rx_old = m_uart_rx_count != 0;
+	uart_update_irq();
+}
+
+void mc68328_base_device::uart_rx_line(bool state)
 {
 	if (type() != MC68EZ328)
 		return;
@@ -3203,6 +3357,7 @@ TIMER_CALLBACK_MEMBER(mc68328_base_device::uart_rx_tick)
 			m_uart_rx_fifo[m_uart_rx_tail] = m_uart_rx_data;
 			m_uart_rx_tail = (m_uart_rx_tail + 1) & 7;
 			++m_uart_rx_count;
+			m_uart_rx_old_timer->adjust(uart_bit_time() * 30);
 		}
 		else if (!m_uart_rx_level)
 		{
@@ -3217,9 +3372,9 @@ TIMER_CALLBACK_MEMBER(mc68328_base_device::uart_rx_tick)
 	}
 }
 
-void mc68328_base_device::ustcnt_w(u16 data)
+void mc68328_base_device::ustcnt_w(offs_t offset, u16 data, u16 mem_mask)
 {
-	m_ustcnt = data;
+	COMBINE_DATA(&m_ustcnt);
 	if (type() == MC68EZ328)
 	{
 		uart_start_tx();
@@ -3232,9 +3387,9 @@ u16 mc68328_base_device::ustcnt_r()
 	return m_ustcnt;
 }
 
-void mc68328_base_device::ubaud_w(u16 data)
+void mc68328_base_device::ubaud_w(offs_t offset, u16 data, u16 mem_mask)
 {
-	m_ubaud = data;
+	COMBINE_DATA(&m_ubaud);
 }
 
 u16 mc68328_base_device::ubaud_r()
@@ -3256,12 +3411,15 @@ u16 mc68328_base_device::urx_r(offs_t offset, u16 mem_mask)
 	{
 		result = (result & ~0xff) | m_uart_rx_fifo[m_uart_rx_head];
 		result |= URX_DATA_READY;
+		if (m_uart_rx_old) result |= 0x1000;
 		if (m_uart_rx_count >= 4) result |= URX_FIFO_HALF;
 		if (m_uart_rx_count == 8) result |= URX_FIFO_FULL;
 		if (ACCESSING_BITS_0_7)
 		{
 			m_uart_rx_head = (m_uart_rx_head + 1) & 7;
 			--m_uart_rx_count;
+			m_uart_rx_old = false;
+			m_uart_rx_old_timer->adjust(m_uart_rx_count ? uart_bit_time() * 30 : attotime::never);
 			m_urx &= ~(URX_FRAME_ERROR | URX_OVRUN);
 			uart_update_irq();
 		}
@@ -3273,12 +3431,14 @@ void mc68328_base_device::utx_w(offs_t offset, u16 data, u16 mem_mask)
 {
 	if (type() != MC68EZ328)
 		return;
+	if (ACCESSING_BITS_8_15)
+		m_utx = (m_utx & 0xff) | (data & (UTX_IGNORE_CTS | UTX_SEND_BREAK));
 	if (ACCESSING_BITS_0_7 && m_uart_tx_count < 8)
 	{
 		m_uart_tx_fifo[m_uart_tx_tail] = data & 0xff;
 		m_uart_tx_tail = (m_uart_tx_tail + 1) & 7;
 		++m_uart_tx_count;
-		m_utx = data & 0xff;
+		m_utx = (m_utx & 0xff00) | (data & 0xff);
 		uart_start_tx();
 		uart_update_irq();
 	}
@@ -3290,14 +3450,15 @@ u16 mc68328_base_device::utx_r()
 		return m_utx | UTX_FIFO_EMPTY | UTX_FIFO_HALF | UTX_TX_AVAIL;
 	u16 result = m_utx;
 	if (m_uart_tx_count < 8) result |= UTX_TX_AVAIL;
-	if (m_uart_tx_count <= 4) result |= UTX_FIFO_HALF;
+	if (m_uart_tx_count < 4) result |= UTX_FIFO_HALF;
+	if (m_uart_tx_active) result |= 0x0400;
 	if (!m_uart_tx_count && !m_uart_tx_active) result |= UTX_FIFO_EMPTY;
 	return result;
 }
 
-void mc68328_base_device::umisc_w(u16 data)
+void mc68328_base_device::umisc_w(offs_t offset, u16 data, u16 mem_mask)
 {
-	m_umisc = data;
+	COMBINE_DATA(&m_umisc);
 }
 
 u16 mc68328_base_device::umisc_r()

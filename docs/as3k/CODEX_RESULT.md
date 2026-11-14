@@ -1,3 +1,177 @@
+## 2026-11-13 — Constructor de ROM + prueba temporal — CLOSED / PASS
+
+Dos aplicaciones independientes con GUI/CLI, backend único y entradas en
+Herramientas de AS3K Stable y AS3K-DIAG: scripts/as3k-rom-builder y
+scripts/as3k-applet-test. Lanzadores y accesos locales instalados. Interfaz
+AS2K reutilizada; mismo ./alphasma3k, sin compilación de applets.
+
+ROM compuesta AlphaWord Plus + Calculator + Beamer: inventario nativo de
+System 3 correcto y r8proof escrito desde memoria nueva. GUI/CLI generan
+la misma ROM y manifiesto; selección/proyecto/orden/no sobrescritura probados.
+Dos variantes reales SpellCheck Small/Large USA (ID A005) usan imágenes y
+sesiones distintas, NVRAM nueva, canarios ausentes y limpieza completa.
+Cierre GUI durante ejecución/SIGTERM: PASS. Stable y DIAG lanzan ambas
+aplicaciones y restauran su ROM/persistencia al cerrar la ventana de prueba.
+Once pruebas de backend, las dieciséis regresiones R3–R10 y USB original
+completo de 47 bytes: PASS, ejecutados en esta intervención.
+
+El driver añade únicamente entrada MAME de imagen de solo lectura (-rom),
+inicializando IPL/Flash existentes antes de NVRAM. Cores MCU/USB/bootstrap,
+payload y cambios anteriores intactos; ninguna ROM de entrada modificada.
+Binario SHA-256 f8e5bc944b5cf4bdc723f1a450f117682a9ddb669b18555e8148e665fe4b4da3.
+ROM nueva SHA-256 8e62752b619ead2f199eb82222c84bfad2f81616a0bd2665bbb289549e72c0bb.
+
+Uso: tools/as3k_rom_tools/README.md. Informe: ROM_TOOLS_20261113.md.
+Evidencia: work/AS3K_ROM_TOOLS_20261113. Sin commit/push. Solo aviso previo
+AGENTS.md:44 en diff --check. R11 ADB/IrDA sigue OPEN; bootstrap específico y
+hardware físico NOT TESTED aquí. Entrega documental en Drive acreditada
+por delivery_verification.json.
+
+Entrega verificada en Drive: https://drive.google.com/file/d/1XQN6B52nUZfmhscrtornFNrulvCaDyi9/view?usp=drivesdk
+ZIP: 126534 bytes; SHA-256 40b1aceeb688a7052d92f6898bbe28e42b2ce778b87b827de03c10fa3da1ba81.
+Checksum: https://drive.google.com/file/d/1H4w6wjmS0GjB6ZuFRiVqOUWE-EPGtgO1/view?usp=drivesdk
+Bitácora permanente actualizada y leída de contraste: https://docs.google.com/document/d/1VsmwfH4bTQd_zE_RLb7DcExKVSIP1j5gql-2tz7edvo
+
+
+---
+
+## Correctivo integrado: payload-0 con BOOT OK en LCD — CLOSED / NATIVE PASS
+
+Referencia: AS3K_CODEX_CORRECTIVO_PAYLOAD0_LCD_20261112.md. Campaña registrada
+en work/AS3K_PAYLOAD0_LCD_20261113 (fecha UTC; 12 de noviembre en Matamoros).
+La aceptación anterior de 138 bytes acreditaba UART; faltaba la función visual.
+El MISMO scripts/as3k_payload0.s ahora inicializa el LCD existente, escribe
+BOOT OK y conserva íntegro su contrato UART. No se crea otra variante.
+
+### Resultado observado
+
+- LCD_BOOT_OK_PASS: PNG nativo de MAME 240×36, LCD 40×4, BOOT OK legible
+  en la primera fila. Revisado visualmente. BOOT, WRITER y ciclo normal ->
+  bootstrap visual -> normal generan imágenes idénticas píxel por píxel.
+- Captura: SHA-256 8213d41a2a71d49c441506a03be129243f9c089bde9aea4eb2d7f9a768c29597.
+- Payload: 338 bytes, rango 00030000–00030151; SHA-256
+  ebc5bc5652c14cdf9f236c3bf05be04daa7f9aa9230b98c62da4105bd45cd0d3.
+- Checksum calculado por instrucciones del payload: 00006B14, contrastado con
+  la suma de su nueva imagen. No se reutiliza el oráculo histórico 0000323F.
+- Identidad UART intacta: AS3K:P0:v1:BOOT OK CR LF.
+  Desafío y eco: 00 A5 FF 5A. Confirmación: 4F 4B 0D 0A.
+- B-records segmentados de 16 bytes, COUNT FF de 255 bytes e IBUFF D7=55
+  pasan. La imagen observada en RAM coincide con los 338 bytes ensamblados.
+  JMP FFFFFF44 permite otra carga REENTER_OK.
+- BUILD PASS: make reducido PRECOMPILE=0 REGENIE=1 -j2, exit 0.
+  validate exit 0. El ejecutable conserva SHA-256
+  f8d8e11ea7bf6d3ef3fd6a9ff1a42a8774781bc896575ca0dcdcd7b53b1218e4.
+- Las 16 regresiones R3–R10 pasan nuevamente: cuatro auditorías, D11,
+  UART FIFO/PTY, teclado, BOOT/WRITER, Flash y SRAM. R8/R9 mantienen LCD
+  idéntico píxel por píxel a las referencias congeladas.
+- USB R10 completo: MAME y anfitrión exit 0, descriptores auténticos,
+  SET_ADDRESS/SET_CONFIGURATION y los 47 bytes de Get idénticos TX/RX.
+
+
+Informe completo añadido en EZ328_BOOTSTRAP_PAYLOAD0_20261112.md.
+Fuentes locales preservadas; GIT_SYNC_BLOCKED (ahead 12 / behind 2), sin commit/push.
+La entrega en Drive se acredita por delivery_verification.json cuando exista.
+
+---
+
+## 2026-11-12 — Bootstrap EZ328 + payload-0: NATIVE PASS (modelo de servicios)
+
+Mismo AS3K-DIAG; binario SHA-256 f8d8e11ea7bf6d3ef3fd6a9ff1a42a8774781bc896575ca0dcdcd7b53b1218e4.
+EMUBRK selecciona los vectores internos reales FFFCFFFC/FFFFFF00 sin escribir SRAM.
+El 68000 ejecuta un modelo propio de 234 bytes de los servicios documentados;
+NO se presenta como ROM enmascarada Motorola. UART nativa/PTy, eco B -> @,
+COUNT FF de 255 bytes, IBUFF FFFFFFAA con D7=55 y carga/ejecución de payload
+68000 de 138 bytes: identidad AS3K:P0:v1:BOOT OK, checksum 0000323F,
+eco binario 00A5FF5A, OK y JMP FFFFFF44 con nueva carga REENTER_OK.
+Payload observado en RAM SHA-256 idéntico 7ad4e0935e98e6b24df2d35c694a2ab5d505850d3254c9ce2c944f7459cf2fa2.
+
+BOOT y WRITER: PASS. Ciclo normal/bootstrap/normal: PASS; primera página
+SRAM intacta bajo bootstrap, cero escrituras fuera del mapa de ensayo y
+Flash original intacta. UART MMIO: RX 994 y TX 1022 bytes, idénticos al PTY.
+Compilación PRECOMPILE=0 REGENIE=1 -j2, validate, cuatro auditorías y las 16
+regresiones R3–R10: PASS. LCD R8/R9 píxel idéntico. USB R10 completo y 47
+bytes bidireccionales: ambos procesos exit 0. ADB congelado, R11 no cerrado.
+
+Sin ROM modificada, inyección de RAM/PC, segunda UART ni emulador adicional.
+GIT_SYNC_BLOCKED: ahead 12 / behind 2; HEAD 3ba23b4713f conservado, sin
+commit/push ni reconciliación. Excel retirado del alcance por el propietario;
+no se modifica el inventario OS3K ni otros libros. HW físico, máscara Motorola,
+autobaud a otras velocidades y recuperación dinámica save/load: NOT TESTED.
+El aviso AGENTS.md:44 de diff --check es preexistente; cambios propios limpios.
+
+Informe técnico y comandos: EZ328_BOOTSTRAP_PAYLOAD0_20261112.md.
+Evidencia local: work/AS3K_BOOTSTRAP_INTEGRAL_20261112/.
+Publicación de fuentes rechazada por revisión automática; permanecen locales.
+La entrega documental en Drive se acredita únicamente en delivery_verification.json
+y en la nota posterior, si existen; no confundir paquete preparado con entregado.
+
+---
+
+# R11 ADB — 2026-11-11 — OPEN / FAIL
+
+No se terminó Send real ni se aplicó un correctivo funcional. Se preservaron
+las fuentes C++ y el ejecutable previo (SHA-256 idéntico tras compilar).
+
+Causa inmediata demostrada: después de la respuesta Reg3, la ROM lee
+TSTAT.COMP=1 residual solo 13.875 us después de arrancar la nueva espera;
+no hay escritura de limpieza TSTAT y devuelve 0x00. No es un timeout real
+de 20 ms. La ROM efectiva configura 0x21 ms y despacha eventos al applet:
+no coincide uno-a-uno con el C histórico. No se alteró el MCU para borrar
+COMP por TCTL en contra del contrato documentado.
+
+Ensayo send_chain: Writer r8proof r11 + CR, entrada normal y Send físico
+COL7/0x10; 14 comandos 0x2C, uno 0x7F, 33 retornos cero; 3 consultas de
+teclado, 0 eventos ADB consumidos, 0 preparaciones B8 B9. Los 36 bordes
+PB5 solo entregaron 67 5E (identificación). Negativo desconectado: 0 bytes.
+No hay archivo reconstruido ni PASS de Send. El host actual tampoco tiene
+conversión Mac a texto; el sink presente es exclusivamente PS/2 Set-2.
+
+Comandos:
+- make SUBTARGET=alphasma3k SOURCES=src/mame/skeleton/alphasma3k.cpp OSD=sdl REGENIE=1 PRECOMPILE=0 -j3 — exit 0.
+- ./alphasma3k -validate — exit 0.
+- python3 work/AS3K_R11_ADB_SOURCE_GHIDRA_20261111/run_probe.py send_chain — exit 0; Send FAIL.
+- Mismo probe disconnected 0 — exit 0; cero tráfico ADB.
+- Regresión UART con el Lua existente uart_fifo/PG2: RX 10:32:54:76:98:BA:DC:FE, vacío 0000, PASS, exit 0.
+- git diff --check: solo aviso previo AGENTS.md:44, nueva línea vacía al final.
+
+Binario SHA-256: b678c5ee8c6187afd348b73e36301679bbfcaec440e0a33692360763c47d8e21.
+ROM y sección ELF comparadas completas: 1d5002e2e54c732768ee1e296eb9ca868d06935e07afb0d0d9e01e9b5d7135bb.
+Ghidra existente revisado; su mapa no acredita las direcciones efectivas y
+la reapertura -readOnly fue impedida por el sistema de archivos. Se usó
+el contenedor/desensamblado 68000 preexistente y verificado, sin importar ROM.
+
+Cambios de esta ejecución: este informe, nota añadida en STATUS.md y
+scripts/evidencias propios en work/AS3K_R11_ADB_SOURCE_GHIDRA_20261111.
+Concordancias y límites en RE_ADB_SOURCE_ROM_MAP.md; fallo explícito en
+ADB_ACTUAL_CAPTURE.txt. NVRAM de ensayo y listados derivados permanecen
+locales en work/r11_adb_private_20261111, excluidos de entrega.
+Sin cambios al emulador, sin commit/push ni subagentes. Se conserva debajo
+el contenido previo íntegro para no perder las modificaciones ajenas.
+
+Estado final git status --short:
+
+```text
+ M AGENTS.md
+ M docs/as3k/CODEX_NEXT.md
+ M docs/as3k/CODEX_RESULT.md
+ M docs/as3k/R10_PDIUSBD11_I2C_HW_20261101.md
+ M docs/as3k/STATUS.md
+ M src/devices/machine/mc68328.cpp
+ M src/devices/machine/mc68328.h
+ M src/mame/skeleton/alphasma3k.cpp
+?? docs/as3k/R11_CORRECTIVO_RESULT_20261110.md
+?? docs/as3k/R11_NATIVE_OUTPUT_20261105.md
+?? docs/as3k/R11_PRINT_PASS_20261109.md
+?? docs/as3k/R1_OS3K_BOOT_STATIC_20261027.md
+?? scripts/as3k_keyboard_capture.py
+?? scripts/as3k_print_run.py
+?? scripts/as3k_print_to_host.py
+?? scripts/as3k_r10_usbip_acceptance.py
+?? src/mame/skeleton/as3k_usbip.inc
+```
+
+---
+
 # Codex result — AS3K external keyboard latch
 
 Date: 2026-08-26
@@ -374,3 +548,141 @@ No USB D+/D- packet SIE, host enumeration, synthetic printer,
 other emulators or programs were added. R10 remains OPEN.
 See R10_PDIUSBD11_I2C_HW_20261101.md and private
 r10_d11_spec_* / r10_spec_* T160 evidence.
+
+
+## R10 — USB original integrado: CLOSED / PASS (2026-11-05)
+
+Los cuatro criterios integrales fueron reproducidos en el único ./alphasma3k:
+descriptor auténtico de 18 bytes, enumeración con SET_ADDRESS/SET_CONFIGURATION,
+47 bytes idénticos en ambos sentidos por Get Utility original y regresiones
+BOOT/WRITER/UART/teclado/SRAM/Flash. Cliente independiente: exit 0; MAME: exit 0.
+Descriptor teclado: 12010001000000081e0804bd010001020001 (ROM 004EB0BE).
+Descriptor Get: 12010001020000081e0801bd010001030001 (ROM 004EB0D0).
+Payload TX=RX: 52313020555342206f726967696e616c3a20323032362d31312d3035202f20416c706861536d61727420333030300d
+
+Se corrigieron el estado ISR/IMR del EZ328 que perdía IRQ5 antes de STOP y
+SoftConnect 0x10; se completaron reset por reconexión, habilitación D8 02,
+colas por URB, simultaneidad IN/EP0/OUT, UNLINK sin respuesta tardía,
+longitudes OUT, ZLP, timeout y errores TCP. No se modificó ni inyectó firmware.
+La ROM informa protocolo Get 2 (58 02), no la versión 1 de fuentes históricas.
+
+Mismo build reducido REGENIE=1 PRECOMPILE=0 -j3 exit0; validate y cuatro auditorías
+exit0. Regresiones finales: D11 BOOT/WRITER, UART FIFO y PTY A5/5A, R3 D0=0,
+escritura nativa r8proofk10, LCD persistente R8/R9 pixel-idéntico, Flash
+89/D3/A5/NOR/borrados exactos. Siete scripts Lua derivados corrigieron la API
+de salida a machine:exit() y se repitieron sin error Lua; originales intactos.
+
+ZIP original local y Drive: SHA256
+244316710ada4343844d3d1f406ffac13cba49d85b12544a13ea38011120a1d3;
+17 elementos, 22 referencias coincidentes, seis externas.
+Reporte completo, comandos, límites y rutas de evidencia añadidos al documento
+R10_PDIUSBD11_I2C_HW_20261101.md. Evidencia final en
+work/r10_20261105/delivery_acceptance y regressions_clean/summary.json.
+La aceptación prueba USB/IP a nivel de paquetes; kernel VHCI, GUI del fabricante,
+PHY bit a bit, impresión y updater quedan NOT TESTED, sin atribuirles PASS.
+
+HEAD 3ba23b4713f9a1eceb7135bdf9622bdadb43b599 conservado; sin commit/push.
+Cambios: mc68328.cpp, alphasma3k.cpp, as3k_usbip.inc, script de aceptación
+y los tres documentos R10. Preexistentes conservados. Chequeo propio sin
+errores de espacios; chequeo global mantiene exclusivamente el aviso previo
+AGENTS.md:44. El estado Git final se registra debajo.
+
+```text
+## as3k-mame0289-dev...origin/as3k-mame0289-dev [ahead 12, behind 2]
+ M AGENTS.md
+ M docs/as3k/CODEX_NEXT.md
+ M docs/as3k/CODEX_RESULT.md
+ M docs/as3k/R10_PDIUSBD11_I2C_HW_20261101.md
+ M docs/as3k/STATUS.md
+ M src/devices/machine/mc68328.cpp
+ M src/mame/skeleton/alphasma3k.cpp
+?? docs/as3k/R1_OS3K_BOOT_STATIC_20261027.md
+?? scripts/as3k_r10_usbip_acceptance.py
+?? src/mame/skeleton/as3k_usbip.inc
+```
+
+
+## R11 — OPEN / FAIL, intervención diagnóstica incompleta (2026-11-05)
+
+No se completó la integración solicitada. No se modificó el emulador ni se
+implementaron los cuatro interlocutores pendientes. Paquete íntegro: cinco
+entradas, cuatro hashes correctos, ocho referencias existentes.
+Print físico COL9/10 -> 173 bytes PTY; helper AS2K real exit 2, formato
+HP/PCL no aceptado; sin PDF acreditado. Send sin host COL7/10 exit0, sin
+capturas positivas PS/2/ADB. UARTNIPR FFFFF90A=0220 no mapeado observado
+a PC 004D015E; no se afirma causa única del fallo. Referencias F46: ADB
+nominal usa sink Set-2; IR H12 termina FAIL_IR_DIRECTED (exit27).
+Se reejecutaron 16 controles R3–R10 y la aceptación USB completa: todos PASS
+en el mismo binario SHA256 d963fff7e7d39111f67b30e9a71f48d3a5c04ddaba9f2bcdf2e1605ffa5bca27.
+Fuentes/script R10 conservan hashes. No hay impedimento de acceso; falta
+implementación y validación, no autorización. Informe y matriz completos
+en R11_NATIVE_OUTPUT_20261105.md; comandos, bytes y logs en work/r11_20261105.
+Sin commit/push y sin cambios de ROM/NVRAM del propietario.
+
+## R11 — 2026-11-09: PS/2 Send funcional, USB R10 PASS; R11 OPEN
+
+Cambio directo sobre el UNICO ./alphasma3k, sin clonar ni modificar ROM.
+Se reutilizaron send_sink_begin, send_sink_byte y send_sink_end del AS2K
+estable para decodificar tramas Set-2 observadas en las señales PB4/PB5
+del original AS3K. send.txt se escribe en el directorio NVRAM del ensayo,
+NO desde contenido de RAM del Writer.
+
+**PS/2 Send: PASS acotado**. Original WRITER, tecla Send física;
+22 tramas reales, todas válidas. Archivo:
+work/r11_correctivo_20261109/ps2_sink_integrated_final_20261109/nvram/send.txt
+7 bytes exactos 72 38 70 72 6f 6f 66 = r8proof, idénticos al
+documento de ensayo original. MAME exit=0. Build y -validate exit=0.
+
+**Separación IRQ5**: la selección de host PS/2/ADB ya no fuerza IRQ5,
+que pertenece al USB PDIUSBD11; solo usb_irq_update controla esta IRQ.
+El ensayo ADB nativo terminó exit 0 sin captura positiva: ADB OPEN.
+
+**R10 USB original: PASS después de los cambios.** Prueba independiente
+USB/IP con firmware original, ambos procesos exit=0; descriptor teclado
+y Get, enumeración completa, transferencia bidireccional de 47 bytes,
+concurrencia y UNLINK. Evidencias en
+work/r11_correctivo_20261109/usb_after_ps2_adb_isolation.
+
+IrDA bidireccional y Print->RAW completo->CUPS/PDF siguen OPEN.
+El HP/PCL parcial de 32 B no acredita imprimir un documento.
+R11 GLOBAL = OPEN; R10 GLOBAL = CLOSED/PASS.
+Sin commit, push, reset, stash, rebase ni ramas adicionales.
+
+
+## R11 correctivo — 2026-11-10 UTC — esta intervención: OPEN / FAIL
+
+Resultado comprobado y límites en R11_CORRECTIVO_RESULT_20261110.md.
+IrDA: ida/vuelta nativa de 32 bytes idénticos, consulta 0x90 = FB0020.
+Print: RAW HP/PCL completo de 55 bytes -> CUPS AlphaSmart_PDF-11 -> PDF
+nuevo legible, una página. Se guardaron RAW, tramas, comandos y hashes.
+PS/2 con espacios/CR y ADB fiel: FAIL / no acreditados integralmente.
+Regresiones propias sobre binario 4623e9dd...: 14/16 PASS; FIFO y PTY UART
+FAIL. No se proyecta ningún PASS sobre el binario recompilado después.
+Se preservan las notas de otras intervenciones, incluido su R10 histórico,
+pero esta intervención no reproduce su nuevo USB después del último build.
+Bloqueo comprobado: dos cambios concurrentes ajenos en el driver; la guardia
+de hash detuvo el parche antes de escribir. No hubo rollback ni sobrescritura.
+Se solicitó aclarar la escritura exclusiva del árbol. R11 NO TERMINADO.
+
+## R11 Print/PDF CLOSED/PASS — 2026-11-09
+Print original -> serial nativo 57600 -> 55 bytes HP/PCL -> CUPS AlphaSmart_PDF-14 -> PDF 1 página r8proof: PASS. PS/2 y USB R10 regresiones PASS en binario final. ADB e IrDA OPEN. Detalle reproducible en docs/as3k/R11_PRINT_PASS_20261109.md. Sin commit/push.
+
+Entrega documental OPEN/FAIL verificada en Drive: https://drive.google.com/file/d/1oc_qutzmPwWOnfJmRjoOMNR8kf_PEXw_/view?usp=drivesdk
+ZIP 164794 bytes, 169 entradas. SHA-256: 27a1586d409656906f72ee9f15d1d30ced223da6a4c6e86acc0d0a8f682129c5.
+El ZIP es una instantánea de evidencias; no certifica R11 terminado ni el binario concurrente posterior.
+
+
+Entrega documental bootstrap 2026-11-12: DRIVE_EVIDENCE_DELIVERY_PASS.
+ZIP https://drive.google.com/file/d/1gD3X0ZZlAlzz3Ip0KnpK5mJuuK_oQBF1/view?usp=drivesdk
+16960 bytes; SHA-256 remoto descargado 79187a62edaef499bc802b64e9e24fb79ff41b67f07f65264b4acfda22f9e291.
+Bitacora permanente actualizada y releida: https://docs.google.com/document/d/1VsmwfH4bTQd_zE_RLb7DcExKVSIP1j5gql-2tz7edvo
+El ZIP contiene 22 evidencias mas manifiesto; excluye fuentes por rechazo
+de revision automatica. Fuentes y parche: expediente local LOCAL_SOURCES.
+GIT_SYNC_BLOCKED: ahead 12 / behind 2, sin commit/push. Excel retirado por el propietario.
+
+Entrega LCD verificada en Drive: https://drive.google.com/file/d/1GHPhuBc_7L3Gk6i42NM1fiZ9l9nrGBOF/view?usp=drivesdk
+Captura PNG original: https://drive.google.com/file/d/15c3e_9kmsuEHW0amUrPk0Si0X5pPmtTL/view?usp=drivesdk
+ZIP: 20201 bytes, SHA-256 remoto 9c074dfe57cbe868300d7b32c0f9e0b9573d022306ef1f0fd5a03eb3bea394d3.
+PNG: 383 bytes, SHA-256 remoto 8213d41a2a71d49c441506a03be129243f9c089bde9aea4eb2d7f9a768c29597.
+26 archivos publicables mas manifiesto. Fuentes y parche locales; sin ROM ni NVRAM en Drive.
+Bitacora permanente del correctivo actualizada y releida: https://docs.google.com/document/d/1VsmwfH4bTQd_zE_RLb7DcExKVSIP1j5gql-2tz7edvo
