@@ -60,7 +60,8 @@ public:
             const unsigned base=n?right_origin:0;
             if(x<base || x>=base+columns)continue;
             const auto &c=m_c[n];
-            const unsigned ram_y=(y+c.start_line)%128;
+            // Start-line scrolling wraps within the 64 visible rows.
+            const unsigned ram_y=(y+c.start_line)%height;
             const auto bits=c.ram[ram_y/8][x-base];
             value=c.on && (bool((bits>>(ram_y%8))&1) != c.reverse);
         }
