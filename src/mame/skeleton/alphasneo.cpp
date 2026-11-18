@@ -16,7 +16,6 @@
 
 #include "neo_firmware.h"
 #include "neo_keyboard.h"
-#include "neo_lcd.h"
 #include "neo_vz_core.h"
 #include "neo_vz_uart.h"
 #include "neo_nor.h"
@@ -25,6 +24,7 @@
 #include "neo_usb_link.h"
 #include "imagedev/printer.h"
 #include "machine/nvram.h"
+#include "video/st7565.h"
 
 #include <algorithm>
 #include <array>
@@ -55,7 +55,7 @@ namespace {
 class alphasneo_state : public driver_device {
 public:
     alphasneo_state(const machine_config &cfg,device_type type,const char *tag)
-        :driver_device(cfg,type,tag),m_cpu(*this,"maincpu"),
+        :driver_device(cfg,type,tag),m_cpu(*this,"maincpu"),m_lcd(*this,"lcd%u",0U),
          m_uart(*this,"uart%u",0U),m_serial_peer(*this,"serial_peer%u",0U),
          m_usb_printer(*this,"usbprinter"),m_usb_link(*this,"usbcomputer"),
          m_rows(*this,"ROW%u",0U),m_nor_config(*this,"NOR_PROFILE"),
@@ -67,6 +67,7 @@ protected:
     virtual void machine_reset() override ATTR_COLD;
 private:
     required_device<neo_vz_cpu_device> m_cpu;
+    required_device_array<st7565r_device,2> m_lcd;
     required_device_array<neo_vz_uart_device,2> m_uart;
     required_device_array<neo_serial_peer_device,2> m_serial_peer;
     required_device<printer_image_device> m_usb_printer;
@@ -79,7 +80,6 @@ private:
     neo::nor_flash m_nor;
     void nvram_seed_flash(nvram_device &device,void *base,size_t bytes);
     neo::keyboard m_keyboard;
-    neo::lcd m_lcd;
     neo::vz_core m_vz;
     neo::isp1763 m_usb;
     neo_usb::usb_function m_printer_function;
@@ -180,7 +180,7 @@ void alphasneo_state::nvram_seed_flash(nvram_device &,void *base,size_t size) {
 }
 void alphasneo_state::machine_reset() {
     if(!m_firmware_valid)return;
-    m_keyboard.reset();m_lcd.reset();m_usb.reset();m_registers.fill(0);
+    m_keyboard.reset();m_usb.reset();m_registers.fill(0);
     m_printer_function=neo_usb::usb_function{};
     m_pd_last_pins=0xff; m_pd_edges=0;
     m_nor.select_profile((m_nor_config->read()&1)?
@@ -409,18 +409,18 @@ void alphasneo_state::flash_w(offs_t offset,u16 data,u16 mask) {
 }
 u16 alphasneo_state::lcd_read(unsigned n,u16 mask) {
     u16 result=0xffff;
-    if(mask&0xff00)result=(result&0x00ff)|(u16(m_lcd.status(n))<<8);
-    if(mask&0x00ff)result=(result&0xff00)|m_lcd.read(n,!machine().side_effects_disabled());
+    if(mask&0xff00)result=(result&0x00ff)|(u16(m_lcd[n]->status_r())<<8);
+    if(mask&0x00ff)result=(result&0xff00)|m_lcd[n]->data_r();
     return result;
 }
 void alphasneo_state::lcd_write(unsigned n,u16 data,u16 mask) {
-    if(mask&0xff00)m_lcd.command(n,data>>8);
-    if(mask&0x00ff)m_lcd.write(n,data&0xff);
+    if(mask&0xff00)m_lcd[n]->control_w(data>>8);
+    if(mask&0x00ff)m_lcd[n]->data_w(data&0xff);
 }
 u32 alphasneo_state::screen_update(screen_device &,bitmap_ind16 &bitmap,const rectangle &clip) {
     for(int y=clip.min_y;y<=clip.max_y;++y)
         for(int x=clip.min_x;x<=clip.max_x;++x)
-            bitmap.pix(y,x)=m_lcd.pixel(x,y)?1:0;
+            bitmap.pix(y,x)=m_lcd[x / 132]->pixel_r(x % 132,y);
     return 0;
 }
 void alphasneo_state::palette_init(palette_device &palette) const {
@@ -614,7 +614,11 @@ void alphasneo_state::asneo(machine_config &cfg) {
     m_cpu->set_addrmap(m68000_base_device::AS_CPU_SPACE,&alphasneo_state::cpu_space_map);
     screen_device &screen(SCREEN(cfg,"screen",SCREEN_TYPE_LCD));
     screen.set_refresh_hz(60);
-    screen.set_size(neo::lcd::width,neo::lcd::height);
+    // Data Image module: two 132-column ST7565-compatible controllers.
+    // The dies are under epoxy; ST7565R is a protocol-compatible provisional ID.
+    ST7565R(cfg,m_lcd[0]);
+    ST7565R(cfg,m_lcd[1]);
+    screen.set_size(264,64);
     screen.set_visarea_full();
     screen.set_screen_update(FUNC(alphasneo_state::screen_update));
     screen.set_palette("palette");

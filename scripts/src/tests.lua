@@ -67,6 +67,5 @@ project("mametests")
 		MAME_DIR .. "tests/lib/util/options.cpp",
 		MAME_DIR .. "tests/emu/attotime.cpp",
 		MAME_DIR .. "tests/emu/video/rgbutil.cpp",
-		MAME_DIR .. "tests/mame/neo_lcd.cpp",
 	}
 

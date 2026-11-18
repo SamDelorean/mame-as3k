@@ -2060,3 +2060,15 @@ if VIDEOS["ZR36110"] then
 		MAME_DIR .. "src/devices/video/zr36110.h",
 	}
 end
+
+--------------------------------------------------
+--
+--@src/devices/video/st7565.h,VIDEOS["ST7565"] = true
+--------------------------------------------------
+
+if VIDEOS["ST7565"] then
+	files {
+		MAME_DIR .. "src/devices/video/st7565.cpp",
+		MAME_DIR .. "src/devices/video/st7565.h",
+	}
+end
