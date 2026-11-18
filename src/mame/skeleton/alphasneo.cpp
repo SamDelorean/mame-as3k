@@ -410,7 +410,7 @@ void alphasneo_state::flash_w(offs_t offset,u16 data,u16 mask) {
 u16 alphasneo_state::lcd_read(unsigned n,u16 mask) {
     u16 result=0xffff;
     if(mask&0xff00)result=(result&0x00ff)|(u16(m_lcd.status(n))<<8);
-    if(mask&0x00ff)result=(result&0xff00)|m_lcd.read(n);
+    if(mask&0x00ff)result=(result&0xff00)|m_lcd.read(n,!machine().side_effects_disabled());
     return result;
 }
 void alphasneo_state::lcd_write(unsigned n,u16 data,u16 mask) {
