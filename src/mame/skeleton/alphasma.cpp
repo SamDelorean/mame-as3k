@@ -15,6 +15,17 @@
 ****************************************************************************/
 
 #include "emu.h"
+#include "fileio.h"
+#include "emuopts.h"
+#include <array>
+#include <iterator>
+#include <string_view>
+#include <string>
+#include <fstream>
+#include <sstream>
+#include <vector>
+#include <filesystem>
+#include <cstdlib>
 #include "cpu/mc68hc11/mc68hc11.h"
 #include "machine/nvram.h"
 #include "video/hd44780.h"
@@ -71,7 +82,94 @@ protected:
 	uint8_t           m_matrix[2];
 	uint8_t           m_port_a;
 	uint8_t           m_port_d;
+	std::array<uint8_t,16> m_ui_keyboard{};
+	virtual void screen_updated(bitmap_ind16 const &bitmap) { }
 	std::unique_ptr<bitmap_ind16> m_tmp_bitmap;
+};
+
+enum class as2k_pc_key : uint8_t
+{
+	none,
+	space, tab, enter, backspace, caps_lock,
+	left_shift, right_shift, left_ctrl, right_ctrl, left_alt, right_alt,
+	a, b, c, d, e, f, g, h, i, j, k, l, m,
+	n, o, p, q, r, s, t, u, v, w, x, y, z,
+	num_0, num_1, num_2, num_3, num_4, num_5, num_6, num_7, num_8, num_9,
+	grave, minus, equals, lbrace, rbrace, backslash, semicolon, quote, comma, period, slash,
+	kp_0, kp_1, kp_2, kp_3, kp_4, kp_5, kp_6, kp_7, kp_8, kp_9
+};
+
+
+
+class aspro_send_state : public alphasmart_state
+{
+public:
+    aspro_send_state(const machine_config &mconfig, device_type type, const char *tag)
+        : alphasmart_state(mconfig, type, tag), m_pc_connected(*this, "PC_CONNECTED"), m_bootstrap_mode(*this, "BOOTSTRAP_MODE") {}
+    void aspro_send(machine_config &config);
+    DECLARE_INPUT_CHANGED_MEMBER(pc_connected_changed);
+protected:
+    virtual void machine_start() override ATTR_COLD;
+    virtual void machine_reset() override;
+private:
+    uint8_t pro_port_a_r();
+    void pro_port_a_w(uint8_t data);
+    void pro_port_d_w(uint8_t data);
+    void pc_clock_rising(bool data);
+    void pc_set2_byte(uint8_t data);
+    void pc_key_event(as2k_pc_key key, bool pressed);
+    void pc_keyboard_reset();
+    void sync_pc_session();
+    TIMER_CALLBACK_MEMBER(pc_session_tick);
+    TIMER_CALLBACK_MEMBER(ap07_sci_tick);
+    TIMER_CALLBACK_MEMBER(ui_bridge_tick);
+    TIMER_CALLBACK_MEMBER(ui_key_release);
+    void ui_bridge_init();
+    void ui_bridge_poll();
+    void ui_process_command(std::string const &line);
+    void ui_emit(std::string const &line);
+    bool ui_key_location(std::string_view key, uint8_t &col, uint8_t &mask) const;
+    void ui_key(std::string_view key, bool pressed);
+    virtual void screen_updated(bitmap_ind16 const &bitmap) override;
+    void send_sink_begin();
+    void send_sink_codepoint(char32_t codepoint);
+    void send_sink_end();
+    bool pc_connected() const { return m_ui_pc_override ? m_ui_pc_connected : BIT(m_pc_connected->read(), 0); }
+    required_ioport m_pc_connected;
+    required_ioport m_bootstrap_mode;
+    bool m_ap07_bootstrap_active = false;
+    emu_timer *m_ui_bridge_timer=nullptr, *m_ui_release_timer=nullptr;
+    std::string m_ui_control_path,m_ui_event_path,m_ui_frame_path,m_ui_bootstrap_path;
+    std::streamoff m_ui_offset=0;
+    int m_ui_key_col=-1;
+    uint8_t m_ui_key_mask=0;
+    bool m_ui_pc_override=false, m_ui_pc_connected=false;
+    emu_timer *m_ap07_sci_timer = nullptr;
+    std::array<uint8_t,192> m_ap07_sci_tx{};
+    uint16_t m_ap07_sci_length = 0;
+    uint16_t m_ap07_sci_bit_cursor = 0;
+    uint16_t m_ap07_sci_verified_echo = 0;
+    uint8_t m_ap07_sci_echo_sample = 0;
+    bool m_ap07_sci_streaming = false;
+    uint16_t m_pc_frame = 0;
+    uint8_t m_pc_frame_bits = 0;
+    bool m_pc_set2_break = false;
+    bool m_pc_set2_extended = false;
+    uint8_t m_pc_set2_e1_remaining = 0;
+    bool m_pc_lshift = false;
+    bool m_pc_rshift = false;
+    bool m_pc_lctrl = false;
+    bool m_pc_rctrl = false;
+    bool m_pc_lalt = false;
+    bool m_pc_ralt = false;
+    bool m_pc_caps_lock = false;
+    bool m_pc_alt_numeric_valid = false;
+    uint8_t m_pc_alt_numeric_count = 0;
+    char m_pc_alt_numeric_digits[4]{};
+    bool m_pc_session_connected = false;
+    bool m_send_sink_active = false;
+    bool m_send_sink_had_data = false;
+    std::unique_ptr<emu_file> m_send_sink;
 };
 
 class asma2k_state : public alphasmart_state
@@ -101,6 +199,817 @@ private:
 	uint8_t m_lcd_ctrl;
 };
 
+
+void aspro_send_state::aspro_send(machine_config &config)
+{
+    alphasmart(config); // Pro memory map / LCD / keyboard / NVRAM UNCHANGED.
+    m_maincpu->in_pa_callback().set(FUNC(aspro_send_state::pro_port_a_r));
+    m_maincpu->out_pa_callback().set(FUNC(aspro_send_state::pro_port_a_w));
+    m_maincpu->out_pd_callback().set(FUNC(aspro_send_state::pro_port_d_w));
+}
+
+
+void aspro_send_state::ui_emit(std::string const &msg)
+{
+    if(m_ui_event_path.empty()) return;
+    std::ofstream out(m_ui_event_path,std::ios::binary|std::ios::app);
+    if(out) out<<msg<<'\n';
+}
+void aspro_send_state::ui_bridge_init()
+{
+    if(const char *v=std::getenv("ASPRO_UI_CONTROL_FILE")) m_ui_control_path=v;
+    if(const char *v=std::getenv("ASPRO_UI_EVENT_FILE")) m_ui_event_path=v;
+    if(const char *v=std::getenv("ASPRO_UI_FRAME_FILE")) m_ui_frame_path=v;
+    if(const char *v=std::getenv("ASPRO_BOOTSTRAP_FILE")) m_ui_bootstrap_path=v;
+    m_ui_release_timer=timer_alloc(FUNC(aspro_send_state::ui_key_release),this);
+    if(!m_ui_control_path.empty())
+    {
+        m_ui_bridge_timer=timer_alloc(FUNC(aspro_send_state::ui_bridge_tick),this);
+        m_ui_bridge_timer->adjust(attotime::from_msec(10),0,attotime::from_msec(10));
+        ui_emit("STATUS\tASPRO stable UI ready");
+    }
+}
+TIMER_CALLBACK_MEMBER(aspro_send_state::ui_bridge_tick) { ui_bridge_poll(); }
+TIMER_CALLBACK_MEMBER(aspro_send_state::ui_key_release)
+{
+    if(m_ui_key_col<0) return;
+    m_ui_keyboard[m_ui_key_col] |= m_ui_key_mask;
+    m_maincpu->set_input_line(MC68HC11_IRQ_LINE,ASSERT_LINE);
+    m_ui_key_col=-1; m_ui_key_mask=0;
+}
+bool aspro_send_state::ui_key_location(std::string_view name,uint8_t &col,uint8_t &mask) const
+{
+    struct key_map { std::string_view name; uint8_t col, mask; };
+    // Pro keyboard matrix: derived exclusively from INPUT_PORTS_START(alphasmart).
+    // FIND has no corresponding physical Pro key; do not synthesize a position.
+    static constexpr key_map keys[] =
+	{
+		{ "RBRACKET",10,0x04 }, { "F6",10,0x02 }, { "K",10,0x10 }, { "I",10,0x40 },
+		{ "EQUALS",10,0x01 }, { "8",10,0x20 }, { "COMMA",10,0x80 },
+		{ "LALT",9,0x01 }, { "RALT",9,0x80 },
+		{ "F7",0,0x04 }, { "L",0,0x10 }, { "O",0,0x40 }, { "F8",0,0x01 },
+		{ "9",0,0x20 }, { "PERIOD",0,0x80 },
+		{ "LBRACKET",3,0x04 }, { "QUOTE",3,0x02 }, { "SEMICOLON",3,0x10 },
+		{ "P",3,0x40 }, { "MINUS",3,0x01 }, { "0",3,0x20 }, { "SLASH",3,0x08 },
+		{ "COMMAND",6,0x02 }, { "HOME",6,0x40 }, { "CLEAR",6,0x20 }, { "ESC",14,0x02 },
+		{ "DOWN",5,0x02 }, { "END",5,0x80 }, { "LEFT",5,0x08 },
+		{ "ENTER",4,0x01 }, { "RIGHT",4,0x08 },
+		{ "SEND",7,0x01 }, { "UP",7,0x08 },
+		{ "BACKSPACE",11,0x04 }, { "F5",11,0x02 }, { "BACKSLASH",11,0x10 },
+		{ "PRINT",11,0x01 }, { "SPELL",11,0x20 }, { "RETURN",11,0x80 }, { "SPACE",11,0x08 },
+		{ "F3",12,0x04 }, { "F4",12,0x02 }, { "D",12,0x10 }, { "E",12,0x40 },
+		{ "F2",12,0x01 }, { "3",12,0x20 }, { "C",12,0x80 },
+		{ "CAPSLOCK",13,0x04 }, { "S",13,0x10 }, { "W",13,0x40 }, { "F1",13,0x01 },
+		{ "2",13,0x20 }, { "X",13,0x80 },
+		{ "TAB",14,0x04 }, { "A",14,0x10 }, { "Q",14,0x40 }, { "GRAVE",14,0x01 },
+		{ "1",14,0x20 }, { "Z",14,0x80 }, { "LCTRL",8,0x10 },
+		{ "T",1,0x04 }, { "G",1,0x02 }, { "F",1,0x10 }, { "R",1,0x40 },
+		{ "5",1,0x01 }, { "4",1,0x20 }, { "V",1,0x80 }, { "B",1,0x08 },
+		{ "LSHIFT",15,0x04 }, { "RSHIFT",15,0x80 },
+		{ "Y",2,0x04 }, { "H",2,0x02 }, { "J",2,0x10 }, { "U",2,0x40 },
+		{ "6",2,0x01 }, { "7",2,0x20 }, { "M",2,0x80 }, { "N",2,0x08 },
+	};
+    for(auto const &entry: keys)
+        if(entry.name==name) { col=entry.col; mask=entry.mask; return true; }
+    return false;
+}
+void aspro_send_state::ui_key(std::string_view name,bool pressed)
+{
+    uint8_t col,mask;
+    if(!ui_key_location(name,col,mask))
+    { ui_emit("STATUS\tUnrecognized Pro key"); return; }
+    if(pressed) m_ui_keyboard[col] &= ~mask;
+    else m_ui_keyboard[col] |= mask;
+    m_maincpu->set_input_line(MC68HC11_IRQ_LINE,ASSERT_LINE);
+}
+void aspro_send_state::ui_process_command(std::string const &line)
+{
+    if(line.rfind("KEYDOWN ",0)==0) { ui_key(std::string_view(line).substr(8),true); return; }
+    if(line.rfind("KEYUP ",0)==0) { ui_key(std::string_view(line).substr(6),false); return; }
+    if(line.rfind("KEY ",0)==0)
+    {
+        std::string_view key(line.data()+4,line.size()-4);
+        uint8_t col,mask;
+        if(!ui_key_location(key,col,mask))
+        { ui_emit("STATUS\tUnrecognized Pro key"); return; }
+        if(m_ui_key_col>=0) m_ui_keyboard[m_ui_key_col] |= m_ui_key_mask;
+        m_ui_key_col=col; m_ui_key_mask=mask;
+        ui_key(key,true);
+        m_ui_release_timer->adjust(attotime::from_msec(45)); return;
+    }
+    if(line=="PC ON" || line=="PC OFF")
+    {
+        bool value=line=="PC ON";
+        bool changed=value!=pc_connected();
+        m_ui_pc_override=true; m_ui_pc_connected=value;
+        if(changed)
+        {
+            m_pc_frame=0; m_pc_frame_bits=0;
+            pc_keyboard_reset(); send_sink_end();
+            m_maincpu->set_input_line(MC68HC11_IRQ_LINE,ASSERT_LINE);
+        }
+        ui_emit(std::string("STATUS\tPC ")+(value?"connected":"disconnected"));
+        return;
+    }
+    if(line=="MACHINE RESET") { machine().schedule_soft_reset(); return; }
+    if(line=="BOOTSTRAP CLEAR" || line.rfind("BOOTSTRAP CLEAR ",0)==0)
+    {
+        m_ui_bootstrap_path.clear();
+        std::string token=line.size()>16?line.substr(16):"";
+        if(!token.empty()) ui_emit("BOOT_ACK\t"+token+"\tSTOCK");
+        ui_emit("STATUS\tStock ROM boot selected");
+        machine().schedule_soft_reset(); return;
+    }
+    if(line.rfind("BOOTSTRAP_FILE ",0)==0)
+    {
+        auto value=line.substr(15),token=std::string();
+        if(value.rfind("REQ:",0)==0)
+        {
+            auto delim=value.find(' ');
+            if(delim!=std::string::npos)
+            { token=value.substr(4,delim-4); value=value.substr(delim+1); }
+        }
+        std::error_code ec;
+        uintmax_t const len=std::filesystem::file_size(value,ec);
+        if(ec || len<1 || len>192)
+        {
+            if(!token.empty()) ui_emit("BOOT_ACK\t"+token+"\tINVALID");
+            ui_emit("STATUS\tBootstrap image must be 1..192 bytes"); return;
+        }
+        m_ui_bootstrap_path=value;
+        if(!token.empty()) ui_emit("BOOT_ACK\t"+token+"\tACTIVE");
+        machine().schedule_soft_reset(); return;
+    }
+    if(line.rfind("FIRMWARE ",0)==0)
+    { ui_emit("STATUS\tChoose firmware from ASPRO settings, restart to load"); return; }
+}
+void aspro_send_state::ui_bridge_poll()
+{
+    if(m_ui_control_path.empty()) return;
+    std::ifstream in(m_ui_control_path,std::ios::binary|std::ios::ate);
+    if(!in) return;
+    auto end=in.tellg();
+    if(end<0) return;
+    if(end<m_ui_offset) m_ui_offset=0;
+    if(end==m_ui_offset) return;
+    in.seekg(m_ui_offset);
+    std::string chunk((std::istreambuf_iterator<char>(in)),std::istreambuf_iterator<char>());
+    m_ui_offset=end;
+    std::istringstream lines(chunk); std::string line;
+    while(std::getline(lines,line))
+    {
+        if(!line.empty()&&line.back()=='\r') line.pop_back();
+        if(!line.empty()) ui_process_command(line);
+    }
+}
+void aspro_send_state::screen_updated(bitmap_ind16 const &bitmap)
+{
+    if(m_ui_frame_path.empty()) return;
+    constexpr unsigned width=240,height=36;
+    std::array<uint8_t,width*height> pixels{};
+    for(unsigned y=0;y<height;y++)
+        for(unsigned x=0;x<width;x++) pixels[y*width+x]=bitmap.pix(y,x)?1:0;
+    std::ofstream out(m_ui_frame_path,std::ios::binary|std::ios::trunc);
+    if(out) out.write(reinterpret_cast<const char *>(pixels.data()),pixels.size());
+}
+
+void aspro_send_state::machine_start()
+{
+    alphasmart_state::machine_start();
+    m_ap07_sci_timer = timer_alloc(FUNC(aspro_send_state::ap07_sci_tick), this);
+    ui_bridge_init();
+    // Lua field overrides may not fire PORT_CHANGED_MEMBER; keep host state
+    // independent of ROM PA/PD polling, as in AS2K UI bridge timers.
+    timer_alloc(FUNC(aspro_send_state::pc_session_tick), this)->adjust(
+        attotime::from_msec(10), 0, attotime::from_msec(10));
+}
+
+TIMER_CALLBACK_MEMBER(aspro_send_state::pc_session_tick)
+{
+    sync_pc_session();
+}
+
+TIMER_CALLBACK_MEMBER(aspro_send_state::ap07_sci_tick)
+{
+    if (!m_ap07_sci_streaming)
+        return;
+    auto &d0 = downcast<mc68hc11d0_device &>(*m_maincpu);
+    // One 8N1 RX frame followed by its independently transmitted 8N1
+    // TXD echo frame. Only after receiving the complete echo may the
+    // bootstrap host send the next program byte.
+    const unsigned total_frame_bits = (unsigned(m_ap07_sci_length) + 1U) * 20U;
+    const unsigned cursor = m_ap07_sci_bit_cursor++;
+    if (cursor < total_frame_bits)
+    {
+        const unsigned frame = cursor / 20U;
+        const unsigned phase = cursor % 20U;
+        const uint8_t expected = frame ? m_ap07_sci_tx[frame - 1] : 0xff;
+        if (phase < 10U)
+        {
+            const bool rxd = (phase == 0U) ? false :
+                (phase == 9U ? true : BIT(expected, phase - 1U));
+            d0.diag_bootstrap_rx_bit(rxd);
+        }
+        else
+        {
+            // RX remains idle while the bootstrap CPU shifts its TXD echo.
+            d0.diag_bootstrap_rx_bit(true);
+            const bool txd = d0.diag_bootstrap_tx_bit();
+            const unsigned tx_phase = phase - 10U;
+            if (tx_phase == 0U)
+            {
+                if (txd)
+                    fatalerror("ASPRO_AP07_SCI_TXD_START_MISSING frame=%u", frame);
+                m_ap07_sci_echo_sample = 0;
+            }
+            else if (tx_phase < 9U)
+            {
+                if (txd)
+                    m_ap07_sci_echo_sample |= uint8_t(1U << (tx_phase - 1U));
+            }
+            else
+            {
+                if (!txd || m_ap07_sci_echo_sample != expected ||
+                    d0.diag_bootstrap_echo_count() != m_ap07_sci_verified_echo + 1U)
+                    fatalerror("ASPRO_AP07_SCI_TXD_ECHO_MISMATCH frame=%u", frame);
+                logerror("ASPRO_AP07_HOST_ECHO_CHECK index=%u value=%02X\n",
+                    frame, unsigned(m_ap07_sci_echo_sample));
+                ++m_ap07_sci_verified_echo;
+            }
+        }
+    }
+    else
+    {
+        // End of variable length download: at least four complete
+        // character times of RX idle must precede jumping to RAM.
+        d0.diag_bootstrap_rx_bit(true);
+    }
+    if (d0.diag_bootstrap_error())
+        fatalerror("ASPRO_AP07_SCI_BAD_FRAME_OR_SYNC");
+    if (d0.diag_bootstrap_done())
+    {
+        m_ap07_sci_streaming = false;
+        m_ap07_sci_timer->adjust(attotime::never);
+        if (d0.diag_bootstrap_rx_count() != m_ap07_sci_length ||
+            m_ap07_sci_verified_echo != m_ap07_sci_length + 1U)
+            fatalerror("ASPRO_AP07_SCI_BAD_TRANSFER_OR_ECHO_COUNT");
+        logerror("ASPRO_AP07_SCI_EXECUTION_TRANSFERRED pc=0040 len=%u echoes=%u\n",
+            unsigned(m_ap07_sci_length), unsigned(m_ap07_sci_verified_echo));
+    }
+    else if (m_ap07_sci_bit_cursor > total_frame_bits + 41U)
+        fatalerror("ASPRO_AP07_SCI_IDLE_TERMINATION_TIMEOUT");
+}
+
+void aspro_send_state::machine_reset()
+{
+    alphasmart_state::machine_reset();
+    m_pc_frame = 0;
+    m_pc_frame_bits = 0;
+    m_ap07_sci_length = 0;
+    m_ap07_sci_bit_cursor = 0;
+    m_ap07_sci_verified_echo = 0;
+    m_ap07_sci_echo_sample = 0;
+    m_ap07_sci_streaming = false;
+    if (m_ap07_sci_timer)
+        m_ap07_sci_timer->adjust(attotime::never);
+    pc_keyboard_reset();
+    send_sink_end();
+    m_pc_session_connected = false;
+    // The AS2K donor's diagnostic POST-transfer entry, selected explicitly.
+    // This is NOT an emulation of the D0's internal bootstrap ROM or SCI pins.
+    auto &d0 = downcast<mc68hc11d0_device &>(*m_maincpu);
+    // The payload, when explicitly staged into this diagnostic session's
+    // private snapshot directory, selects special bootstrap *at reset*.
+    // Do not depend on Lua field overrides surviving an intermediate reset:
+    // a new Lua VM is created too late for the D0 CPU reset decision.
+    emu_file file(std::string(machine().options().snapshot_directory()), OPEN_FLAG_READ);
+    auto const payload_error = file.open("payload0_pro.bin");
+    const bool selected = BIT(m_bootstrap_mode->read(), 0) || !payload_error || !m_ui_bootstrap_path.empty();
+    m_ap07_bootstrap_active = selected;
+    d0.set_diag_bootstrap(selected);
+    if (selected)
+    {
+        const uint64_t size = !m_ui_bootstrap_path.empty()
+            ? std::filesystem::file_size(m_ui_bootstrap_path) : file.size();
+        if (size < 1 || size > 192)
+            fatalerror("ASPRO stable bootstrap must be 1..192 bytes");
+        if (!m_ui_bootstrap_path.empty())
+        {
+            std::ifstream in(m_ui_bootstrap_path,std::ios::binary);
+            if (!in.read(reinterpret_cast<char *>(m_ap07_sci_tx.data()),std::streamsize(size)))
+                fatalerror("ASPRO stable bootstrap file read failed");
+        }
+        else
+        {
+            if (payload_error || file.read(m_ap07_sci_tx.data(),uint32_t(size))!=uint32_t(size))
+                fatalerror("ASPRO stable staged payload unavailable");
+        }
+        m_ap07_sci_length = uint16_t(size);
+        d0.diag_bootstrap_begin();
+        m_ap07_sci_streaming = true;
+        // D0 E clock 2 MHz / 256 cycles => 7812.5 baud, 8N1. Host
+        // produces physical UART bit cells; CPU decoder handles RX+echo.
+        const attotime cell = attotime::from_ticks(256, 2'000'000);
+        m_ap07_sci_timer->adjust(cell, 0, cell);
+        logerror("ASPRO_AP07_SCI_HOST_START bytes=%u baud=7812.5 hprio=%02X\n",
+            unsigned(size), unsigned(d0.hprio()));
+    }
+}
+
+INPUT_CHANGED_MEMBER(aspro_send_state::pc_connected_changed)
+{
+    // Connected-host transitions own the TXT lifetime, even while the ROM
+    // is idle and makes no further PA/PD accesses. Same event hook as AS2K.
+    sync_pc_session();
+}
+
+void aspro_send_state::sync_pc_session()
+{
+    bool const connected=pc_connected();
+    if (connected == m_pc_session_connected)
+        return;
+    // One capture per host connection, independent of how many Send keys.
+    m_pc_session_connected=connected;
+    m_pc_frame=0;
+    m_pc_frame_bits=0;
+    pc_keyboard_reset();
+    if (connected)
+    {
+        send_sink_begin();
+        logerror("ASPRO_PC_SESSION_CONNECTED\n");
+    }
+    else
+    {
+        send_sink_end();
+        logerror("ASPRO_PC_SESSION_DISCONNECTED\n");
+    }
+    // The Pro/AS2K firmware may be waiting for a keyboard IRQ before it
+    // samples host-present PA lines. Wake once per physical PC edge, without
+    // fabricating a key or touching the verified Set-2 transport. This is a
+    // testable compatibility hypothesis, NOT proof of a hardware IRQ wire.
+    m_maincpu->set_input_line(MC68HC11_IRQ_LINE, ASSERT_LINE);
+    logerror("ASPRO_PC_HOST_EDGE_WAKE_IRQ attached=%u\n", connected ? 1U : 0U);
+}
+
+uint8_t aspro_send_state::pro_port_a_r()
+{
+    sync_pc_session();
+    // AS2K host sense donor: PA0 idle + PA2 attached; unverified on Pro hardware.
+    uint8_t data = (m_port_a & 0xfd) | (m_battery_status->read() << 1);
+    data &= ~uint8_t(0x05);
+    if (pc_connected())
+        data |= 0x05;
+    return data;
+}
+
+void aspro_send_state::pro_port_a_w(uint8_t data)
+{
+    alphasmart_state::port_a_w(data);
+}
+
+void aspro_send_state::pro_port_d_w(uint8_t data)
+{
+    sync_pc_session();
+    // Stock donor's physical Set-2 RX sampling, no ROM subroutine interception.
+    if (pc_connected() && !BIT(m_port_d,0) && BIT(data,0))
+        pc_clock_rising(!BIT(data,1));
+    alphasmart_state::port_d_w(data);
+}
+
+void aspro_send_state::send_sink_begin()
+{
+    // Open exactly once on PC attach, even when no bytes follow.
+    // Decode and append only actual parity-checked firmware frames.
+    m_send_sink = std::make_unique<emu_file>(
+        std::string(machine().options().snapshot_directory()),
+        OPEN_FLAG_WRITE | OPEN_FLAG_CREATE | OPEN_FLAG_CREATE_PATHS);
+    m_send_sink_had_data = false;
+    auto const err = m_send_sink->open("send.txt");
+    if (err)
+    {
+        logerror("ASPRO_PC_TXT_OPEN_FAILED error=%s\n",err.message());
+        m_send_sink.reset();
+        m_send_sink_active = false;
+        return;
+    }
+    m_send_sink_active = true;
+    logerror("ASPRO_PC_TXT_OPEN\n");
+}
+
+void aspro_send_state::send_sink_end()
+{
+    if (m_send_sink)
+    {
+        m_send_sink->flush();
+        m_send_sink->close();
+        m_send_sink.reset();
+    }
+    if (m_send_sink_had_data)
+        logerror("ASPRO_PC_TXT_FINISHED\n");
+    m_send_sink_active = false;
+    m_send_sink_had_data = false;
+}
+
+
+void aspro_send_state::pc_keyboard_reset()
+{
+	m_pc_set2_break = false;
+	m_pc_set2_extended = false;
+	m_pc_set2_e1_remaining = 0;
+	m_pc_lshift = false;
+	m_pc_rshift = false;
+	m_pc_lctrl = false;
+	m_pc_rctrl = false;
+	m_pc_lalt = false;
+	m_pc_ralt = false;
+	m_pc_caps_lock = false;
+	m_pc_alt_numeric_valid = false;
+	m_pc_alt_numeric_count = 0;
+}
+
+void aspro_send_state::pc_clock_rising(bool data)
+{
+	if (!m_pc_frame_bits)
+	{
+		if (data)
+			return;
+		m_pc_frame = 0;
+	}
+
+	if (data)
+		m_pc_frame |= uint16_t(1) << m_pc_frame_bits;
+	++m_pc_frame_bits;
+
+	if (m_pc_frame_bits != 11)
+		return;
+
+	uint8_t const value = (m_pc_frame >> 1) & 0xff;
+	bool odd_parity = BIT(m_pc_frame, 9);
+	for (unsigned bit = 0; bit < 8; ++bit)
+		odd_parity ^= BIT(value, bit);
+
+	bool const valid = !BIT(m_pc_frame, 0) && BIT(m_pc_frame, 10) && odd_parity;
+	bool const resync_start = !BIT(m_pc_frame, 10);
+	m_pc_frame = 0;
+	m_pc_frame_bits = 0;
+
+	if (valid)
+	{
+        // Session is owned by the PC attach/detach boundary, not first byte.
+        if (!m_pc_session_connected || !m_send_sink_active)
+            return;
+		pc_set2_byte(value);
+	}
+	else
+	{
+		logerror("ASPRO_PC_FRAME_ERROR value=%02X\n", value);
+		if (resync_start)
+			m_pc_frame_bits = 1;
+	}
+}
+
+struct as2k_set2_key_map
+{
+	uint8_t code;
+	bool extended;
+	as2k_pc_key key;
+};
+
+static constexpr as2k_set2_key_map s_set2_keys[] =
+{
+	{ 0x0d, false, as2k_pc_key::tab },        { 0x0e, false, as2k_pc_key::grave },
+	{ 0x11, false, as2k_pc_key::left_alt },   { 0x11, true,  as2k_pc_key::right_alt },
+	{ 0x12, false, as2k_pc_key::left_shift }, { 0x14, false, as2k_pc_key::left_ctrl },
+	{ 0x14, true,  as2k_pc_key::right_ctrl }, { 0x15, false, as2k_pc_key::q },
+	{ 0x16, false, as2k_pc_key::num_1 },      { 0x1a, false, as2k_pc_key::z },
+	{ 0x1b, false, as2k_pc_key::s },          { 0x1c, false, as2k_pc_key::a },
+	{ 0x1d, false, as2k_pc_key::w },          { 0x1e, false, as2k_pc_key::num_2 },
+	{ 0x21, false, as2k_pc_key::c },          { 0x22, false, as2k_pc_key::x },
+	{ 0x23, false, as2k_pc_key::d },          { 0x24, false, as2k_pc_key::e },
+	{ 0x25, false, as2k_pc_key::num_4 },      { 0x26, false, as2k_pc_key::num_3 },
+	{ 0x29, false, as2k_pc_key::space },      { 0x2a, false, as2k_pc_key::v },
+	{ 0x2b, false, as2k_pc_key::f },          { 0x2c, false, as2k_pc_key::t },
+	{ 0x2d, false, as2k_pc_key::r },          { 0x2e, false, as2k_pc_key::num_5 },
+	{ 0x31, false, as2k_pc_key::n },          { 0x32, false, as2k_pc_key::b },
+	{ 0x33, false, as2k_pc_key::h },          { 0x34, false, as2k_pc_key::g },
+	{ 0x35, false, as2k_pc_key::y },          { 0x36, false, as2k_pc_key::num_6 },
+	{ 0x3a, false, as2k_pc_key::m },          { 0x3b, false, as2k_pc_key::j },
+	{ 0x3c, false, as2k_pc_key::u },          { 0x3d, false, as2k_pc_key::num_7 },
+	{ 0x3e, false, as2k_pc_key::num_8 },      { 0x41, false, as2k_pc_key::comma },
+	{ 0x42, false, as2k_pc_key::k },          { 0x43, false, as2k_pc_key::i },
+	{ 0x44, false, as2k_pc_key::o },          { 0x45, false, as2k_pc_key::num_0 },
+	{ 0x46, false, as2k_pc_key::num_9 },      { 0x49, false, as2k_pc_key::period },
+	{ 0x4a, false, as2k_pc_key::slash },      { 0x4b, false, as2k_pc_key::l },
+	{ 0x4c, false, as2k_pc_key::semicolon },  { 0x4d, false, as2k_pc_key::p },
+	{ 0x4e, false, as2k_pc_key::minus },      { 0x52, false, as2k_pc_key::quote },
+	{ 0x54, false, as2k_pc_key::lbrace },     { 0x55, false, as2k_pc_key::equals },
+	{ 0x58, false, as2k_pc_key::caps_lock },  { 0x59, false, as2k_pc_key::right_shift },
+	{ 0x5a, false, as2k_pc_key::enter },      { 0x5b, false, as2k_pc_key::rbrace },
+	{ 0x5d, false, as2k_pc_key::backslash },  { 0x66, false, as2k_pc_key::backspace },
+	{ 0x69, false, as2k_pc_key::kp_1 },       { 0x6b, false, as2k_pc_key::kp_4 },
+	{ 0x6c, false, as2k_pc_key::kp_7 },       { 0x70, false, as2k_pc_key::kp_0 },
+	{ 0x72, false, as2k_pc_key::kp_2 },       { 0x73, false, as2k_pc_key::kp_5 },
+	{ 0x74, false, as2k_pc_key::kp_6 },       { 0x75, false, as2k_pc_key::kp_8 },
+	{ 0x7a, false, as2k_pc_key::kp_3 },       { 0x7d, false, as2k_pc_key::kp_9 }
+};
+
+// The host text layout is indexed by consecutive as2k_pc_key values from
+// a through slash.  Each row is [unshifted, shifted]; Caps Lock applies
+// only to the contiguous a..z range, not to punctuation or number keys.
+// Alt-numeric composition is handled separately from this ordinary layout.
+static constexpr char32_t s_pc_us_text[][2] =
+{
+	{ U'a', U'A' }, // a
+	{ U'b', U'B' }, // b
+	{ U'c', U'C' }, // c
+	{ U'd', U'D' }, // d
+	{ U'e', U'E' }, // e
+	{ U'f', U'F' }, // f
+	{ U'g', U'G' }, // g
+	{ U'h', U'H' }, // h
+	{ U'i', U'I' }, // i
+	{ U'j', U'J' }, // j
+	{ U'k', U'K' }, // k
+	{ U'l', U'L' }, // l
+	{ U'm', U'M' }, // m
+	{ U'n', U'N' }, // n
+	{ U'o', U'O' }, // o
+	{ U'p', U'P' }, // p
+	{ U'q', U'Q' }, // q
+	{ U'r', U'R' }, // r
+	{ U's', U'S' }, // s
+	{ U't', U'T' }, // t
+	{ U'u', U'U' }, // u
+	{ U'v', U'V' }, // v
+	{ U'w', U'W' }, // w
+	{ U'x', U'X' }, // x
+	{ U'y', U'Y' }, // y
+	{ U'z', U'Z' }, // z
+	{ U'0', U')' }, // num_0
+	{ U'1', U'!' }, // num_1
+	{ U'2', U'@' }, // num_2
+	{ U'3', U'#' }, // num_3
+	{ U'4', U'$' }, // num_4
+	{ U'5', U'%' }, // num_5
+	{ U'6', U'^' }, // num_6
+	{ U'7', U'&' }, // num_7
+	{ U'8', U'*' }, // num_8
+	{ U'9', U'(' }, // num_9
+	{ U'`', U'~' }, // grave
+	{ U'-', U'_' }, // minus
+	{ U'=', U'+' }, // equals
+	{ U'[', U'{' }, // lbrace
+	{ U']', U'}' }, // rbrace
+	{ U'\\', U'|' }, // backslash
+	{ U';', U':' }, // semicolon
+	{ U'\'', U'"' }, // quote
+	{ U',', U'<' }, // comma
+	{ U'.', U'>' }, // period
+	{ U'/', U'?' }, // slash
+};
+
+static_assert(std::size(s_pc_us_text) == unsigned(as2k_pc_key::slash) - unsigned(as2k_pc_key::a) + 1);
+
+
+void aspro_send_state::pc_set2_byte(uint8_t data)
+{
+	if (m_pc_set2_e1_remaining)
+	{
+		--m_pc_set2_e1_remaining;
+		return;
+	}
+
+	if (data == 0xe1)
+	{
+		// Pause/Break is the canonical eight-byte E1 sequence in Set 2.  It
+		// carries no text, so consume the sequence without fabricating a key.
+		m_pc_set2_e1_remaining = 7;
+		m_pc_set2_break = false;
+		m_pc_set2_extended = false;
+		return;
+	}
+
+	if (data == 0xe0)
+	{
+		m_pc_set2_extended = true;
+		return;
+	}
+
+	if (data == 0xf0)
+	{
+		m_pc_set2_break = true;
+		return;
+	}
+
+	as2k_pc_key key = as2k_pc_key::none;
+	for (auto const &entry : s_set2_keys)
+	{
+		if ((entry.code == data) && (entry.extended == m_pc_set2_extended))
+		{
+			key = entry.key;
+			break;
+		}
+	}
+
+	if (key != as2k_pc_key::none)
+		pc_key_event(key, !m_pc_set2_break);
+	else
+		logerror("ASPRO_PC_UNKNOWN_SET2 extended=%u break=%u code=%02X\n",
+			m_pc_set2_extended ? 1U : 0U, m_pc_set2_break ? 1U : 0U, data);
+
+	m_pc_set2_break = false;
+	m_pc_set2_extended = false;
+}
+// Windows ANSI Alt+0xxx numeric codes use Windows-1252 for the
+// 0x80-0x9f range. Undefined CP1252 byte positions have value zero.
+// This is a selected host profile, NOT a claim about all receiving PCs.
+static constexpr char32_t s_pc_windows_1252_extended[32] =
+{
+	U'€', 0, U'‚', U'ƒ', U'„', U'…', U'†', U'‡',
+	U'ˆ', U'‰', U'Š', U'‹', U'Œ', 0, U'Ž', 0,
+	0, U'‘', U'’', U'“', U'”', U'•', U'–', U'—',
+	U'˜', U'™', U'š', U'›', U'œ', 0, U'ž', U'Ÿ'
+};
+
+
+void aspro_send_state::pc_key_event(as2k_pc_key key, bool pressed)
+{
+	bool const was_alt = m_pc_lalt || m_pc_ralt;
+	if (key == as2k_pc_key::left_alt || key == as2k_pc_key::right_alt)
+	{
+		if (key == as2k_pc_key::left_alt)
+			m_pc_lalt = pressed;
+		else
+			m_pc_ralt = pressed;
+
+		bool const now_alt = m_pc_lalt || m_pc_ralt;
+		if (!was_alt && now_alt)
+		{
+			m_pc_alt_numeric_count = 0;
+			m_pc_alt_numeric_valid = !(m_pc_lctrl || m_pc_rctrl || m_pc_lshift || m_pc_rshift);
+		}
+		else if (was_alt && !now_alt)
+		{
+			// Host Windows ANSI profile: Alt+0ddd is one composition.
+			// Releasing Alt commits a complete, bounded keypad sequence only.
+			if (m_pc_alt_numeric_valid && m_pc_alt_numeric_count == 4 && m_pc_alt_numeric_digits[0] == '0')
+			{
+				unsigned code = 0;
+				for (char digit : m_pc_alt_numeric_digits)
+					code = code * 10 + unsigned(digit - '0');
+
+				char32_t character = 0;
+				if (code >= 0x20 && code < 0x7f)
+					character = char32_t(code);
+				else if (code >= 0x80 && code < 0xa0)
+					character = s_pc_windows_1252_extended[code - 0x80];
+				else if (code >= 0xa0 && code <= 0xff)
+					character = char32_t(code);
+
+				if (character)
+					send_sink_codepoint(character);
+				else
+					logerror("ASPRO_PC_ALT_NUMERIC_UNMAPPED code=%u\n", code);
+			}
+			else if (m_pc_alt_numeric_count)
+				logerror("ASPRO_PC_ALT_NUMERIC_CANCEL count=%u\n", m_pc_alt_numeric_count);
+
+			m_pc_alt_numeric_count = 0;
+			m_pc_alt_numeric_valid = false;
+		}
+		return;
+	}
+
+	switch (key)
+	{
+	case as2k_pc_key::left_shift:  m_pc_lshift = pressed; break;
+	case as2k_pc_key::right_shift: m_pc_rshift = pressed; break;
+	case as2k_pc_key::left_ctrl:   m_pc_lctrl = pressed; break;
+	case as2k_pc_key::right_ctrl:  m_pc_rctrl = pressed; break;
+	case as2k_pc_key::caps_lock:
+		if (pressed)
+			m_pc_caps_lock = !m_pc_caps_lock;
+		break;
+	default:
+		break;
+	}
+
+	// Any non-keypad press during Alt cancels the numeric transaction,
+	// even if the pressed key is not normally a text key.
+	if (pressed && was_alt)
+	{
+		char digit = 0;
+		switch (key)
+		{
+		case as2k_pc_key::kp_0: digit = '0'; break;
+		case as2k_pc_key::kp_1: digit = '1'; break;
+		case as2k_pc_key::kp_2: digit = '2'; break;
+		case as2k_pc_key::kp_3: digit = '3'; break;
+		case as2k_pc_key::kp_4: digit = '4'; break;
+		case as2k_pc_key::kp_5: digit = '5'; break;
+		case as2k_pc_key::kp_6: digit = '6'; break;
+		case as2k_pc_key::kp_7: digit = '7'; break;
+		case as2k_pc_key::kp_8: digit = '8'; break;
+		case as2k_pc_key::kp_9: digit = '9'; break;
+		default: break;
+		}
+		if (digit && m_pc_alt_numeric_valid && m_pc_alt_numeric_count < 4)
+			m_pc_alt_numeric_digits[m_pc_alt_numeric_count++] = digit;
+		else
+			m_pc_alt_numeric_valid = false;
+		return;
+	}
+
+	if (!pressed)
+		return;
+
+	// Unrecognized combinations must not leak an ordinary printable key.
+	if (m_pc_lctrl || m_pc_rctrl || was_alt)
+	{
+		logerror("ASPRO_PC_COMPOSE_PENDING key=%u ctrl=%u alt=%u\n",
+			unsigned(key), (m_pc_lctrl || m_pc_rctrl) ? 1U : 0U, was_alt ? 1U : 0U);
+		return;
+	}
+
+	if (key == as2k_pc_key::left_shift || key == as2k_pc_key::right_shift ||
+		key == as2k_pc_key::left_ctrl || key == as2k_pc_key::right_ctrl ||
+		key == as2k_pc_key::caps_lock)
+		return;
+
+	if (key == as2k_pc_key::space)
+	{
+		send_sink_codepoint(U' ');
+		return;
+	}
+	if (key == as2k_pc_key::tab)
+	{
+		send_sink_codepoint(U'\t');
+		return;
+	}
+	if (key == as2k_pc_key::enter)
+	{
+		send_sink_codepoint(U'\n');
+		return;
+	}
+	if (key == as2k_pc_key::backspace)
+	{
+		logerror("ASPRO_PC_NON_TEXT backspace\n");
+		return;
+	}
+
+	if (key >= as2k_pc_key::a && key <= as2k_pc_key::slash)
+	{
+		bool const shifted = m_pc_lshift || m_pc_rshift;
+		bool const letter = key <= as2k_pc_key::z;
+		bool const use_shifted = letter ? (shifted != m_pc_caps_lock) : shifted;
+		send_sink_codepoint(s_pc_us_text[unsigned(key) - unsigned(as2k_pc_key::a)][use_shifted ? 1 : 0]);
+		return;
+	}
+
+	logerror("ASPRO_PC_NON_TEXT key=%u\n", unsigned(key));
+}
+
+void aspro_send_state::send_sink_codepoint(char32_t codepoint)
+{
+	if (!m_send_sink_active)
+		return;
+
+	char utf8[4];
+	size_t length = 0;
+	if (codepoint <= 0x7f)
+	{
+		utf8[0] = char(codepoint);
+		length = 1;
+	}
+	else if (codepoint <= 0x7ff)
+	{
+		utf8[0] = char(0xc0 | (codepoint >> 6));
+		utf8[1] = char(0x80 | (codepoint & 0x3f));
+		length = 2;
+	}
+	else if (codepoint <= 0xffff)
+	{
+		utf8[0] = char(0xe0 | (codepoint >> 12));
+		utf8[1] = char(0x80 | ((codepoint >> 6) & 0x3f));
+		utf8[2] = char(0x80 | (codepoint & 0x3f));
+		length = 3;
+	}
+	else if (codepoint <= 0x10ffff)
+	{
+		utf8[0] = char(0xf0 | (codepoint >> 18));
+		utf8[1] = char(0x80 | ((codepoint >> 12) & 0x3f));
+		utf8[2] = char(0x80 | ((codepoint >> 6) & 0x3f));
+		utf8[3] = char(0x80 | (codepoint & 0x3f));
+		length = 4;
+	}
+
+	if (length)
+	{
+		m_send_sink->write(utf8, length);
+		m_send_sink->flush();
+		m_send_sink_had_data = true;
+	}
+}
 INPUT_CHANGED_MEMBER(alphasmart_state::kb_irq)
 {
 	// IRQ on every key transition
@@ -114,7 +1023,7 @@ uint8_t alphasmart_state::kb_r()
 
 	for(int i=0; i<16; i++)
 		if (!(matrix & (1<<i)))
-			data &= m_keyboard[i]->read();
+			data &= m_keyboard[i]->read() & m_ui_keyboard[i];
 
 	return data;
 }
@@ -372,6 +1281,17 @@ static INPUT_PORTS_START( alphasmart )
 	PORT_CONFSETTING (0x01, DEF_STR(Normal))
 INPUT_PORTS_END
 
+
+static INPUT_PORTS_START( aspro_send )
+    PORT_INCLUDE( alphasmart )
+    PORT_START("PC_CONNECTED")
+    PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_OTHER) PORT_NAME("ASPRO PC Connected (external state)") PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(aspro_send_state::pc_connected_changed), 0)
+    PORT_START("BOOTSTRAP_MODE")
+    PORT_CONFNAME(0x01, 0x00, "AP-07 D0 special bootstrap (diagnostic post-transfer)")
+    PORT_CONFSETTING(0x00, "Normal AlphaSmart Pro ROM")
+    PORT_CONFSETTING(0x01, "RAM payload: POST-SCI injection")
+INPUT_PORTS_END
+
 static INPUT_PORTS_START( asma2k )
 	PORT_START("COL.0")
 	PORT_BIT(0x01, IP_ACTIVE_LOW, IPT_KEYBOARD) PORT_CODE(KEYCODE_CLOSEBRACE) PORT_CHAR(']') PORT_CHAR('}') PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(alphasmart_state::kb_irq), 0)
@@ -536,6 +1456,7 @@ uint32_t alphasmart_state::screen_update(screen_device &screen, bitmap_ind16 &bi
 	copybitmap(bitmap, *m_tmp_bitmap, 0, 0, 0, 0, cliprect);
 	m_lcdc[1]->screen_update(screen, *m_tmp_bitmap, cliprect);
 	copybitmap(bitmap, *m_tmp_bitmap, 0, 0, 0, 18,cliprect);
+	screen_updated(bitmap);
 	return 0;
 }
 
@@ -560,6 +1481,7 @@ void alphasmart_state::machine_reset()
 	m_matrix[0] = m_matrix[1] = 0;
 	m_port_a = 0;
 	m_port_d = 0;
+	m_ui_keyboard.fill(0xff);
 }
 
 void alphasmart_state::alphasmart(machine_config &config)
@@ -633,5 +1555,5 @@ ROM_END
 
 
 //    YEAR  NAME     PARENT  COMPAT  MACHINE     INPUT       CLASS             INIT        COMPANY                           FULLNAME           FLAGS
-COMP( 1995, asmapro, 0,      0,      alphasmart, alphasmart, alphasmart_state, empty_init, "Intelligent Peripheral Devices", "AlphaSmart Pro" , MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
+COMP( 1995, asmapro, 0,      0,      aspro_send, aspro_send, aspro_send_state, empty_init, "Intelligent Peripheral Devices", "AlphaSmart Pro" , MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
 COMP( 1997, asma2k,  0,      0,      asma2k,     asma2k,     asma2k_state,     empty_init, "Intelligent Peripheral Devices", "AlphaSmart 2000", MACHINE_NOT_WORKING | MACHINE_NO_SOUND )

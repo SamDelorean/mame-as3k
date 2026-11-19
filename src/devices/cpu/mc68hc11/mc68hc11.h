@@ -83,6 +83,11 @@ protected:
 
 	void set_irq_state(uint8_t irqn, bool state);
 
+	// Bounded diagnostic helper: install an already-received bootstrap image
+	// into internal RAM and begin execution there.
+	void diagnostic_bootstrap_entry(const uint8_t *data, uint16_t size, uint16_t address);
+	void diagnostic_bootstrap_wait_for_serial();
+
 	virtual void mc68hc11_reg_map(memory_view::memory_view_entry &block, offs_t base) = 0;
 
 	template <int P> uint8_t port_r();
@@ -578,13 +583,49 @@ public:
 	// construction/destruction
 	mc68hc11d0_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock);
 
+	// Bounded Special-Bootstrap diagnostic support. Normal D0 users are
+	// unchanged unless this mode is explicitly enabled by a machine target.
+	void set_diag_bootstrap(bool enable) { m_diag_bootstrap = enable; }
+	bool diag_bootstrap_enabled() const { return m_diag_bootstrap; }
+	uint8_t hprio() const { return m_hprio; }
+	void diag_bootstrap_load(const uint8_t *data, uint16_t size, uint16_t address = 0x0040);
+	void diag_bootstrap_begin();
+	void diag_bootstrap_rx_bit(bool rxd);
+	bool diag_bootstrap_tx_bit();
+	bool diag_bootstrap_done() const { return m_diag_sci_done; }
+	bool diag_bootstrap_error() const { return m_diag_sci_bad; }
+	uint16_t diag_bootstrap_rx_count() const { return m_diag_sci_count; }
+	uint16_t diag_bootstrap_echo_count() const { return m_diag_sci_echo_count; }
+	uint8_t diag_bootstrap_echo_last() const { return m_diag_sci_echo_last; }
+
+
 protected:
+	virtual void device_start() override ATTR_COLD;
 	virtual void device_reset() override ATTR_COLD;
 
 	virtual void mc68hc11_reg_map(memory_view::memory_view_entry &block, offs_t base) override;
 
 private:
 	uint8_t reg01_r();
+	uint8_t hprio_r();
+	void hprio_w(uint8_t data);
+
+	bool m_diag_bootstrap;
+	uint8_t m_hprio;
+	uint8_t m_diag_sci_ram[192]{};
+	uint16_t m_diag_sci_count = 0;
+	uint16_t m_diag_sci_echo_count = 0;
+	uint8_t m_diag_sci_echo_last = 0;
+	uint8_t m_diag_sci_tx_bit = 0;
+	bool m_diag_sci_tx_pending = false;
+	uint8_t m_diag_sci_shift = 0;
+	uint8_t m_diag_sci_bit = 0;
+	uint8_t m_diag_sci_idle = 0;
+	bool m_diag_sci_receiving = false;
+	bool m_diag_sci_synced = false;
+	bool m_diag_sci_done = false;
+	bool m_diag_sci_bad = false;
+
 };
 
 class mc68hc11e1_device : public mc68hc11_cpu_device

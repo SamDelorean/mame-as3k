@@ -122,6 +122,8 @@ mc68hc11a1_device::mc68hc11a1_device(const machine_config &mconfig, const char *
 
 mc68hc11d0_device::mc68hc11d0_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock)
 	: mc68hc11_cpu_device(mconfig, MC68HC11D0, tag, owner, clock, 192, 64, 0, 0, 0x00, 0x06, 0x3b)
+	, m_diag_bootstrap(false)
+	, m_hprio(0x00)
 {
 }
 
@@ -607,6 +609,7 @@ void mc68hc11d0_device::mc68hc11_reg_map(memory_view::memory_view_entry &block, 
 	block(base + 0x2f, base + 0x2f).nopw(); // SCDR
 	block(base + 0x39, base + 0x39).rw(FUNC(mc68hc11d0_device::option_r), FUNC(mc68hc11d0_device::option_w)); // OPTION
 	block(base + 0x3a, base + 0x3a).nopw(); // COPRST (watchdog)
+	block(base + 0x3c, base + 0x3c).rw(FUNC(mc68hc11d0_device::hprio_r), FUNC(mc68hc11d0_device::hprio_w)); // HPRIO (diagnostic bootstrap)
 	block(base + 0x3d, base + 0x3d).rw(FUNC(mc68hc11d0_device::init_r), FUNC(mc68hc11d0_device::init_w)); // INIT
 	block(base + 0x3f, base + 0x3f).rw(FUNC(mc68hc11d0_device::config_r), FUNC(mc68hc11d0_device::config_w)); // CONFIG
 }
@@ -1044,12 +1047,161 @@ void mc68hc11a1_device::device_reset()
 	ddr_w<1>(0xff);
 }
 
+void mc68hc11d0_device::device_start()
+{
+	mc68hc11_cpu_device::device_start();
+	save_item(NAME(m_hprio));
+}
+
+
 void mc68hc11d0_device::device_reset()
 {
 	mc68hc11_cpu_device::device_reset();
 
 	m_port_data[0] &= 0x8f;
 	ddr_w<0>(0x70);
+	m_hprio = m_diag_bootstrap ? 0xc0 : 0x00;
+}
+
+uint8_t mc68hc11d0_device::hprio_r()
+{
+	return m_diag_bootstrap ? m_hprio : 0xff;
+}
+
+
+void mc68hc11d0_device::hprio_w(uint8_t data)
+{
+	if (!m_diag_bootstrap || !(m_hprio & 0x40))
+		return;
+
+	const uint8_t old = m_hprio;
+	m_hprio = (m_hprio & ~0x20) | (data & 0x20);
+	if (!(data & 0x80))
+		m_hprio &= ~0x80;
+	if (!(data & 0x40))
+		m_hprio &= ~0x40;
+	logerror("HC11D0_DIAG HPRIO %02X -> %02X\n", old, m_hprio);
+}
+
+
+void mc68hc11d0_device::diag_bootstrap_load(const uint8_t *data, uint16_t size, uint16_t address)
+{
+	if (!m_diag_bootstrap)
+		fatalerror("HC11D0 diagnostic bootstrap load requested while disabled");
+
+	m_hprio = 0xc0;
+	m_config |= 0x04;
+	diagnostic_bootstrap_entry(data, size, address);
+}
+
+
+
+void mc68hc11d0_device::diag_bootstrap_begin()
+{
+	if (!m_diag_bootstrap)
+		fatalerror("HC11D0 SCI bootstrap started in normal ROM mode");
+	m_hprio = 0xc0;
+	m_config |= 0x04;
+	m_diag_sci_count = 0;
+	m_diag_sci_echo_count = 0;
+	m_diag_sci_echo_last = 0;
+	m_diag_sci_tx_bit = 0;
+	m_diag_sci_tx_pending = false;
+	m_diag_sci_shift = 0;
+	m_diag_sci_bit = 0;
+	m_diag_sci_idle = 0;
+	m_diag_sci_receiving = false;
+	m_diag_sci_synced = false;
+	m_diag_sci_done = false;
+	m_diag_sci_bad = false;
+	// CPU execution-control fields are private to the BASE class.
+	// Use its encapsulated WAIT entry, leaving the AS2K loader untouched.
+	diagnostic_bootstrap_wait_for_serial();
+	logerror("ASPRO_AP07_SCI_BOOT_BEGIN hprio=C0 baud=7812.5\n");
+}
+
+void mc68hc11d0_device::diag_bootstrap_rx_bit(bool rxd)
+{
+	if (!m_diag_bootstrap || m_diag_sci_done || m_diag_sci_bad)
+		return;
+	if (!m_diag_sci_receiving)
+	{
+		if (!rxd)
+		{
+			m_diag_sci_receiving = true;
+			m_diag_sci_bit = 0;
+			m_diag_sci_shift = 0;
+			m_diag_sci_idle = 0;
+		}
+		else if (m_diag_sci_synced && m_diag_sci_count &&
+				++m_diag_sci_idle >= 40)
+		{
+			m_diag_sci_done = true;
+			logerror("ASPRO_AP07_SCI_TRANSFER_COMPLETE bytes=%u echoes=%u idle_bits=%u\n",
+				unsigned(m_diag_sci_count), unsigned(m_diag_sci_echo_count),
+				unsigned(m_diag_sci_idle));
+			diag_bootstrap_load(m_diag_sci_ram, m_diag_sci_count, 0x0040);
+		}
+		return;
+	}
+	if (m_diag_sci_bit < 8)
+	{
+		if (rxd)
+			m_diag_sci_shift |= uint8_t(1U << m_diag_sci_bit);
+		++m_diag_sci_bit;
+		return;
+	}
+	m_diag_sci_receiving = false;
+	if (!rxd)
+	{
+		m_diag_sci_bad = true;
+		logerror("ASPRO_AP07_SCI_FRAME_ERROR\n");
+		return;
+	}
+	const uint8_t value = m_diag_sci_shift;
+	if (!m_diag_sci_synced)
+	{
+		if (value != 0xff)
+		{
+			m_diag_sci_bad = true;
+			logerror("ASPRO_AP07_SCI_SYNC_ERROR byte=%02X\n", unsigned(value));
+			return;
+		}
+		m_diag_sci_synced = true;
+		logerror("ASPRO_AP07_SCI_SYNC_OK ff\n");
+	}
+	else
+	{
+		if (m_diag_sci_count == 192)
+		{
+			m_diag_sci_bad = true;
+			logerror("ASPRO_AP07_SCI_OVERFLOW\n");
+			return;
+		}
+		m_diag_sci_ram[m_diag_sci_count++] = value;
+		logerror("ASPRO_AP07_SCI_RX index=%u byte=%02X\n",
+			unsigned(m_diag_sci_count - 1), unsigned(value));
+	}
+	// Queue one physical TXD 8N1 reply, not just a counter/log echo.
+	m_diag_sci_echo_last = value;
+	m_diag_sci_tx_bit = 0;
+	m_diag_sci_tx_pending = true;
+}
+
+bool mc68hc11d0_device::diag_bootstrap_tx_bit()
+{
+	if (!m_diag_bootstrap || !m_diag_sci_tx_pending)
+		return true; // UART idle HIGH
+	const uint8_t bit = m_diag_sci_tx_bit++;
+	if (bit == 0)
+		return false; // START bit
+	if (bit <= 8)
+		return BIT(m_diag_sci_echo_last, bit - 1); // D0 TXD, LSB first
+	m_diag_sci_tx_pending = false; // STOP bit HIGH
+	++m_diag_sci_echo_count;
+	logerror("ASPRO_AP07_SCI_TX_ECHO_COMPLETE index=%u byte=%02X\n",
+		unsigned(m_diag_sci_echo_count - 1), unsigned(m_diag_sci_echo_last));
+	return true;
 }
 
 void mc68hc11e1_device::device_reset()
@@ -1168,6 +1320,9 @@ void mc68hc11_cpu_device::check_irq_lines()
 	if (irq_state != 0 && (!(m_ccr & CC_I) || (irq_state >= 0x04000000)))
 	{
 		int level = std::countl_zero(irq_state); // TODO: respect HPRIO setting
+		if (level == 0x06)
+			logerror("AS2K_PM_R4_IRQ_TAKE pc=%04X ccr=%02X stop=%d irq_state=%08X\n",
+				unsigned(m_pc), unsigned(m_ccr), int(m_stop_state), unsigned(m_irq_state));
 		standard_irq_callback(level, m_pc);
 
 		if(m_wait_state == 0)
@@ -1181,6 +1336,9 @@ void mc68hc11_cpu_device::check_irq_lines()
 		}
 		// TODO: vectors differ in bootstrap and special test modes
 		uint16_t pc_vector = READ16(0xfffe - level * 2);
+		if (level == 0x06)
+			logerror("AS2K_PM_R4_IRQ_VECTOR vector=%04X sp_before=%04X\n",
+				unsigned(pc_vector), unsigned(m_sp));
 		SET_PC(pc_vector);
 		m_ccr |= CC_I; //irq taken, mask the flag
 		if (level < 0x06)
@@ -1201,11 +1359,46 @@ void mc68hc11_cpu_device::set_irq_state(uint8_t irqn, bool state)
 		m_irq_state &= ~(0x80000000 >> irqn);
 }
 
+void mc68hc11_cpu_device::diagnostic_bootstrap_entry(const uint8_t *data, uint16_t size, uint16_t address)
+{
+	const uint32_t ram_start = 0x0040;
+	const uint32_t ram_end = ram_start + m_internal_ram_size;
+
+	if (address < ram_start || uint32_t(address) + size > ram_end)
+		fatalerror("HC11 diagnostic bootstrap image $%04X + %u exceeds internal RAM", address, size);
+
+	for (uint16_t i = 0; i < size; i++)
+		m_program.write_byte(address + i, data[i]);
+
+	m_irq_state = 0;
+	m_irq_asserted = false;
+	m_wait_state = 0;
+	m_stop_state = 0;
+	m_ccr = CC_X | CC_I | CC_S;
+	m_pc = address;
+	m_ppc = address;
+}
+
+
+
+void mc68hc11_cpu_device::diagnostic_bootstrap_wait_for_serial()
+{
+	// A D0 special-mode ROM is processing SCI. Pause instruction fetch
+	// without accessing base-private CPU state from the D0 subclass.
+	m_irq_state = 0;
+	m_irq_asserted = false;
+	m_wait_state = 1;
+	m_stop_state = 0;
+	m_ccr = CC_X | CC_I | CC_S;
+}
+
 void mc68hc11_cpu_device::execute_set_input(int inputnum, int state)
 {
 	switch (inputnum)
 	{
 	case MC68HC11_IRQ_LINE:
+		logerror("AS2K_PM_R4_IRQ_INPUT state=%d prev_asserted=%d stop=%d ccr=%02X pc=%04X irq_state=%08X\n",
+			state, m_irq_asserted ? 1 : 0, int(m_stop_state), unsigned(m_ccr), unsigned(m_pc), unsigned(m_irq_state));
 		if (!m_irq_asserted && state != CLEAR_LINE)
 			set_irq_state(0x06, true);
 		else if (m_irq_asserted && state == CLEAR_LINE && !BIT(m_option, 5))
